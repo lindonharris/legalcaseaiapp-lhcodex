@@ -79,7 +79,7 @@ class RAGRequest(BaseModel):
 # Root endpoint
 @app.get("/")
 async def root():
-    return {"success": "Hello Server PodPro"}
+    return {"success": "Hello Server ProvenPath FastAPI App"}
 
 
 # Endpoint for capturing PDF info (sanity check endpoint)
@@ -133,25 +133,6 @@ async def celery_test_addition(request: AdditionRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 # Endpoint to process PDF and generate audio
-
-# [Deprecated No Chaining] 
-# @app.post("/pdf-to-dialogue/", response_model=PDFResponse)
-# async def pdf_to_dialogue(request: PDFRequest, background_tasks: BackgroundTasks):
-#     ''' This is the main function that is called from WeWeb '''
-#     try:
-#         # Trigger the audio generation task asynchronously... added to queue
-#         audio_task = validate_and_generate_audio_task.apply_async(args=[request.files, request.metadata])
-        
-#         # Trigger the document embedding task asynchronously... added to queue
-#         embedding_task = process_pdf_task.apply_async(args=[request.files, request.metadata])
-
-#         # Return the task IDs to the client
-#         return {
-#             "audio_task_id": audio_task.id,
-#             "embedding_task_id": embedding_task.id
-#         }
-#     except Exception as e:
-#         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/pdf-to-dialogue/", response_model=PDFResponse)
 async def pdf_to_dialogue(request: PDFRequest, background_tasks: BackgroundTasks):
