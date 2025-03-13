@@ -1,0 +1,281 @@
+from fastapi import FastAPI, BackgroundTasks, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from datetime import datetime, timezone
+from typing import List, Dict, Any
+import uuid
+from utils.pdf_utils import extract_text_from_pdf
+from tasks.generate_tasks import validate_and_generate_audio_task, generate_dialogue_only_task, process_pdf_task, insert_sources_media_association_task
+from tasks.generate_tasks import addition_task
+from tasks.chat_tasks import rag_chat_task
+from celery import chain, chord, group
+from celery.result import AsyncResult
+
+
+
+# Init fast api app
+app = FastAPI()
+# celery_app = Celery('tasks', broker='redis://localhost:6379/0')
+
+
+origins = [
+    "https://app.weweb.io",  # Replace with the actual WeWeb domain if different
+    "https://editor.weweb.io",
+    # Add other domains as needed
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ======== PYDANTIC MODELS ======== #
+
+# Define Pydantic models for the responses
+class SumResponse(BaseModel):
+    sum: int
+
+class PDFCaptureResponse(BaseModel):
+    uuid: str
+    url: str
+
+# Define Pydantic model for the PDF extraction response
+class PDFExtractResponse(BaseModel):
+    filename: str
+    combined_text: str
+
+class PDFExtractBatchResponse(BaseModel):
+    results: List[PDFExtractResponse]
+
+# [SANITY CHECK] Request model for addition sanity
+class AdditionRequest(BaseModel):
+    x: int
+    y: int
+
+# Pydantic model for the request body
+class PDFRequest(BaseModel):
+    ''' WeWeb specific pydantic struct '''
+    files: List[str]  # List of URLs or file paths of the PDFs
+    metadata: Dict[str, Any]  # A dictionary for any metadata information
+
+# Pydantic model for the response
+class PDFResponse(BaseModel):
+    audio_task_id: str
+    embedding_task_id: str
+
+# RAG Query pydantic model
+class RAGRequest(BaseModel):
+    user_id: str
+    conversation_id: str
+    query: str
+    document_ids: List[str]
+    media_id: str
+
+# ======== TEST ENDPOINTS ======== #
+
+# Root endpoint
+@app.get("/")
+async def root():
+    return {"success": "Hello Server PodPro"}
+
+
+# Endpoint for capturing PDF info (sanity check endpoint)
+@app.get("/pdf_capture", response_model=PDFCaptureResponse)
+async def pdf_capture(file: str):
+    unique_id = str(uuid.uuid4())  # Generate a unique UUID
+    return {"uuid": unique_id, "url": file}
+
+# Endpoint for extracting a single PDF's content
+@app.get("/pdf_extract", response_model=PDFExtractResponse)
+async def pdf_extract(file: str):
+    try:
+        # Extract text using the utility function
+        combined_text = extract_text_from_pdf(file)
+        return {"filename": file.split("/")[-1], "combined_text": combined_text}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# Endpoint for extracting content from multiple PDFs
+@app.post("/pdf_extract_batch", response_model=PDFExtractBatchResponse)
+async def pdf_extract_batch(files: List[str]):
+    results = []
+    
+    for file_url in files:
+        try:
+            # Extract text using the utility function
+            combined_text = extract_text_from_pdf(file_url)
+            filename = file_url.split("/")[-1]
+            results.append(PDFExtractResponse(filename=filename, combined_text=combined_text))
+        
+        except Exception as e:
+            # Append an error message for the current file
+            results.append(PDFExtractResponse(filename=file_url, combined_text=f"Error: {str(e)}"))
+    
+    return {"results": results}
+
+# ======= PDF2PODCAST CELERY TASKS ========= #
+
+# POST endpoint for addition using Celery
+@app.post("/celery_test_addition/")
+async def celery_test_addition(request: AdditionRequest):
+    try:
+        # Enqueue the Celery task
+        print(f"API DEBUG: {[request.x, request.y]}")
+        task = addition_task.apply_async(args=[request.x, request.y])
+        
+        # Return the task ID to the client
+        return {"task_id": task.id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Endpoint to process PDF and generate audio
+
+# [Deprecated No Chaining] 
+# @app.post("/pdf-to-dialogue/", response_model=PDFResponse)
+# async def pdf_to_dialogue(request: PDFRequest, background_tasks: BackgroundTasks):
+#     ''' This is the main function that is called from WeWeb '''
+#     try:
+#         # Trigger the audio generation task asynchronously... added to queue
+#         audio_task = validate_and_generate_audio_task.apply_async(args=[request.files, request.metadata])
+        
+#         # Trigger the document embedding task asynchronously... added to queue
+#         embedding_task = process_pdf_task.apply_async(args=[request.files, request.metadata])
+
+#         # Return the task IDs to the client
+#         return {
+#             "audio_task_id": audio_task.id,
+#             "embedding_task_id": embedding_task.id
+#         }
+#     except Exception as e:
+#         raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/pdf-to-dialogue/", response_model=PDFResponse)
+async def pdf_to_dialogue(request: PDFRequest, background_tasks: BackgroundTasks):
+    try:
+        # Create signatures for the tasks
+        process_pdf_task_signature = process_pdf_task.s(request.files, request.metadata)
+        validate_and_generate_audio_task_signature = validate_and_generate_audio_task.s(request.files, request.metadata)
+
+        # Create the group
+        task_group = group(
+            process_pdf_task_signature,
+            validate_and_generate_audio_task_signature
+        )
+
+        # Create the chord with the group and callback
+        task_chord = chord(task_group)(insert_sources_media_association_task.s())
+
+        # The result of the chord is the AsyncResult of the callback task
+        chord_result = task_chord
+
+        # Get task IDs
+        process_pdf_task_id = chord_result.parent.results[0].id
+        validate_and_generate_audio_task_id = chord_result.parent.results[1].id
+        insert_task_id = chord_result.id
+
+        # Return the task IDs to the client
+        return {
+            "audio_task_id": validate_and_generate_audio_task_id,
+            "embedding_task_id": process_pdf_task_id,
+            "insert_task_id": insert_task_id,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+# Endpoint to process PDFs and generate dialogue transcript
+@app.post("/pdf-to-dialogue-transcript/", response_model=PDFResponse)
+async def pdf_to_dialogue_transcript(request: PDFRequest, background_tasks: BackgroundTasks):
+    try:
+        # Enqueue the Celery task for dialogue generation
+        print(f"API DEBUG: {request.files}")
+        task = generate_dialogue_only_task.apply_async(
+            args=[request.files]
+        )
+        
+        # Return the task ID to the client
+        return {"task_id": task.id}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+# Combined endpoint to check the status of any Celery task
+@app.get("/task-status/{task_id}")
+async def get_task_status(task_id: str):
+    try:
+        task_result = AsyncResult(task_id)
+
+        # Retrieve task metadata
+        task_meta = task_result.info if isinstance(task_result.info, dict) else {}
+        start_time_str = task_meta.get('start_time')
+        elapsed_time = None
+
+        if start_time_str:
+            start_time = datetime.fromisoformat(start_time_str)
+            elapsed_time = (datetime.now(timezone.utc) - start_time).total_seconds()
+
+        if task_result.state == 'PENDING':
+            return {
+                "task_id": task_id,
+                "status": "PENDING",
+                "elapsed_time": elapsed_time
+            }
+        elif task_result.state == 'SUCCESS':
+            return {
+                "task_id": task_id,
+                "status": "SUCCESS",
+                "result": task_result.result,
+                "elapsed_time": elapsed_time
+            }
+        elif task_result.state == 'FAILURE':
+            return {
+                "task_id": task_id,
+                "status": "FAILURE",
+                "error": str(task_result.result),
+                "elapsed_time": elapsed_time
+            }
+        else:
+            return {
+                "task_id": task_id,
+                "status": task_result.state,
+                "elapsed_time": elapsed_time
+            }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+    except Exception as e:
+        # Handle any unexpected exceptions
+        raise HTTPException(status_code=500, detail=f"Error retrieving task status: {str(e)}")
+
+# ======= RAG CELERY TASKS ========= #
+
+@app.post("/rag-chat/")
+async def rag_chat(request: RAGRequest):
+    try:
+        # Trigger the RAG task asynchronously and add it to the queue
+        task = rag_chat_task.apply_async(args=[
+            request.user_id,
+            request.conversation_id,
+            request.query,
+            request.document_ids,
+            request.media_id
+        ])
+        
+        # Return the task ID to the client
+        return {"task_id": task.id}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/rag-chat-status/{task_id}")
+async def get_rag_chat_status(task_id: str):
+    """Endpoint to check the status and result of the RAG chat task."""
+    result = AsyncResult(task_id)
+    if result.state == "SUCCESS":
+        return {"status": result.state, "result": result.result}
+    elif result.state == "FAILURE":
+        return {"status": result.state, "error": str(result.result)}
+    else:
+        return {"status": result.state}
