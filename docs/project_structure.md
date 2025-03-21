@@ -31,6 +31,13 @@ Utilities folder with helper functions for
 
 Tasks dir contains task functions that are processed to be send and executed my the Celery App
 
+celery_app.py: this script inits a celery object which is use throughough the rest of the project
+
+For testing the celery service
+```bash
+celery task.celery_app.py
+```
+
 ### `.env`
 
 contains

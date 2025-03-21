@@ -13,6 +13,9 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
+message_queue_url = os.getenv("AMQP_LAVINMQ_URL")
+redis_labs_url = os.getenv("REDIS_LABS_URL")
+
 # <--- localhost version --->
 
 # Initialize the Celery app
