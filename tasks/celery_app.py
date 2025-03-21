@@ -1,3 +1,8 @@
+"""
+This creates and configures the celery_app instance. There are 2 versions, the localhost version 
+and the cloud hosted (Render) version.
+"""
+
 # celery_app.py 
 
 from celery import Celery
@@ -7,7 +12,6 @@ from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
-
 
 # <--- localhost version --->
 
@@ -50,8 +54,6 @@ import tasks.chat_tasks
 # # Optional: ASK GPT ABOUT IT'S PURPOSE: Automatically discover tasks in specified modules
 # # This allows Celery to find tasks in modules like `generate_tasks.py` and `other_tasks.py`
 celery_app.autodiscover_tasks(['tasks'])
-# celery_app.autodiscover_tasks(['tasks.generate_tasks'])
-# celery_app.autodiscover_tasks(['tasks.chat_tasks'])
 
 # Sanity check print statement
 print("Registered tasks:")

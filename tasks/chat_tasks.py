@@ -1,3 +1,7 @@
+'''
+This file runs Celery tasks for handling RAG chat tasks
+'''
+
 from celery import Celery, Task
 from tasks.celery_app import celery_app  # Import the Celery app instance (see celery_app.py for LocalHost config)
 import logging

@@ -1,4 +1,4 @@
-# From Chat GPT this code shows how to process scaned vs. digital (layerd text) pdf and what packages
+# From Chat GPT this code shows how to process scaned vs. digital (layered text) pdf and what packages
 # are needed to process them accordingly
 
 from PyPDF2 import PdfReader

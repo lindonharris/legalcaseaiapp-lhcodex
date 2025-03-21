@@ -1,25 +1,36 @@
 # Project Documentation 
 
-
-# Structure
+## Structure Overview
 
 ```
+
 root
 |-- src/
     |-- service.py
-|-- utils/
-    |-- models.py
+
+|-- tasks/
     |-- __init__.py
+    |-- models.py
+|-- utils/
+    |-- __init__.py
+    |-- models.py
+|-- docs/
+    |-- documentation.md
+|-- main.py
+|-- .env
+
 ```
 
-# Directories 
+## Directories 
 
 ### `utils/`
 
-### `utils/`
+Utilities folder with helper functions for 
 
-### `utils/`
+### `tasks/`
 
-### `utils/`
+Tasks dir contains task functions that are processed to be send and executed my the Celery App
 
-### `utils/`
+### `.env`
+
+contains
