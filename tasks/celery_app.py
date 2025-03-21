@@ -33,8 +33,8 @@ redis_labs_url = os.getenv("REDIS_LABS_URL")
 # Initialize the Celery app 
 celery_app = Celery(
     'celery_app',
-    broker='amqps://btwzozrv:pcIervFsmCoKgcB2KtOSdNNHMJD7qWRJ@octopus.rmq3.cloudamqp.com/btwzozrv',
-    backend='redis://default:gQJGVV6af9cE3MNUuAHYARdXZF0xQv5f@redis-15250.c17.us-east-1-4.ec2.redns.redis-cloud.com:15250/0',  # RedisLabs instance endpoint  gQJGVV6af9cE3MNUuAHYARdXZF0xQv5f
+    broker=message_queue_url,
+    backend=redis_labs_url,  # RedisLabs instance endpoint  gQJGVV6af9cE3MNUuAHYARdXZF0xQv5f
     task_serializer='json',
     result_serializer='json',
     accept_content=['json'],  # Accept only JSON content

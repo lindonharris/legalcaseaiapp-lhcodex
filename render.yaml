@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: pdf-2-podcast-fastapi-app
+    env: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn app.main:app --host 0.0.0.0 --port 10000"
+    pythonVersion: 3.9.12
+
+  - name: pdf-2-podcast-celery-worker
+    type: worker
+    env: python
+    runtime: python3
+    buildCommand: "pip install -r requirements.txt"
+    
+    pythonVersion: 3.9.12

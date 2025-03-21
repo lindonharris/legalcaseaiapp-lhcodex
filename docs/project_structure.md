@@ -38,6 +38,12 @@ For testing the celery service
 celery task.celery_app.py
 ```
 
+In production (i.e. Render.io):
+
+```bash
+startCommand: "celery -A tasks.celery_app worker --loglevel=info --concurrency=2"
+```
+
 ### `.env`
 
 contains
