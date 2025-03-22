@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 message_queue_env = os.getenv("AMQP_LAVINMQ_URL_AND_PASS")
-redis_labs_env = os.getenv("REDIS_LABS_URL_AND_PASS")
+redis_labs_env = 'redis://default:' + os.getenv("REDIS_FLEX_PASS") + '@' + os.getenv("REDIS_FLEX_INSTANCE")
 
 # <--- localhost version --->
 
