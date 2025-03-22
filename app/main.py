@@ -79,7 +79,7 @@ class RAGRequest(BaseModel):
 # Root endpoint
 @app.get("/")
 async def root():
-    return {"success": "Hello Server ProvenPath FastAPI App"}
+    return {"success": "Hello Server LawStudentPath FastAPI App"}
 
 
 # Endpoint for capturing PDF info (sanity check endpoint)

@@ -13,8 +13,8 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-message_queue_url = os.getenv("AMQP_LAVINMQ_URL")
-redis_labs_url = os.getenv("REDIS_LABS_URL")
+message_queue_env = os.getenv("AMQP_LAVINMQ_URL_AND_PASS")
+redis_labs_env = os.getenv("REDIS_LABS_URL_AND_PASS")
 
 # <--- localhost version --->
 
@@ -33,11 +33,11 @@ redis_labs_url = os.getenv("REDIS_LABS_URL")
 # Initialize the Celery app 
 celery_app = Celery(
     'celery_app',
-    broker=message_queue_url,
-    backend=redis_labs_url,  # RedisLabs instance endpoint  gQJGVV6af9cE3MNUuAHYARdXZF0xQv5f
+    broker=message_queue_env,       # AMQP instance url and password endpoint
+    backend=redis_labs_env,         # RedisLabs instance url and password endpoint  gQJGVV6af9cE3MNUuAHYARdXZF0xQv5f
     task_serializer='json',
     result_serializer='json',
-    accept_content=['json'],  # Accept only JSON content
+    accept_content=['json'],        # Accept only JSON content
 )
 
 # Optional: Load configuration from a separate config file or object
