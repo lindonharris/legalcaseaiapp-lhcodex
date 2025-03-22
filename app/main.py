@@ -34,6 +34,10 @@ app.add_middleware(
 
 # ======== PYDANTIC MODELS ======== #
 
+class Numbers(BaseModel):
+    x: int
+    y: int
+    
 # Define Pydantic models for the responses
 class SumResponse(BaseModel):
     sum: int
@@ -81,6 +85,13 @@ class RAGRequest(BaseModel):
 async def root():
     return {"success": "Hello Server LawStudentPath FastAPI App"}
 
+# Endpoint for sanity check 
+@app.post("/sum_two_num/")
+async def sum_two_num(numbers: AdditionRequest):
+    print("execute 2 sum")
+    task = addition_task.delay(numbers.x, numbers.y)
+    print(f"Task submitted: {task.id}")
+    return {"task_id": task.id}
 
 # Endpoint for capturing PDF info (sanity check endpoint)
 @app.get("/pdf_capture", response_model=PDFCaptureResponse)

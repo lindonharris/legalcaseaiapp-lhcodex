@@ -34,7 +34,7 @@ redis_labs_env = 'redis://default:' + os.getenv("REDIS_FLEX_PASS") + '@' + os.ge
 celery_app = Celery(
     'celery_app',
     broker=message_queue_env,       # AMQP instance url and password endpoint
-    backend=redis_labs_env,         # RedisLabs instance url and password endpoint  gQJGVV6af9cE3MNUuAHYARdXZF0xQv5f
+    backend=redis_labs_env,         # RedisLabs instance url and password endpoint
     task_serializer='json',
     result_serializer='json',
     accept_content=['json'],        # Accept only JSON content
