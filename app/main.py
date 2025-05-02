@@ -5,8 +5,9 @@ from datetime import datetime, timezone
 from typing import List, Dict, Any
 import uuid
 from utils.pdf_utils import extract_text_from_pdf
-from tasks.generate_tasks import validate_and_generate_audio_task, generate_dialogue_only_task, process_pdf_task, insert_sources_media_association_task
-from tasks.generate_tasks import addition_task
+from tasks.podcast_generate_tasks import validate_and_generate_audio_task, generate_dialogue_only_task
+from tasks.upload_tasks import process_pdf_task, insert_sources_media_association_task
+from tasks.test_tasks import addition_task
 from tasks.chat_tasks import rag_chat_task
 from celery import chain, chord, group
 from celery.result import AsyncResult
@@ -83,7 +84,7 @@ class RAGRequest(BaseModel):
 # Root endpoint
 @app.get("/")
 async def root():
-    return {"success": "Hello Server LawStudentPath FastAPI App"}
+    return {"success": "Hello Server LegalNoteAI FastAPI App"}
 
 # Endpoint for sanity check 
 @app.post("/sum_two_num/")
@@ -147,6 +148,11 @@ async def celery_test_addition(request: AdditionRequest):
 
 @app.post("/pdf-to-dialogue/", response_model=PDFResponse)
 async def pdf_to_dialogue(request: PDFRequest, background_tasks: BackgroundTasks):
+    '''
+    Endpoint to create both a pdf/RAG pipeline and create an AI podcast in one call:
+        - process_pdf_task 
+        - validate_and_generate_audio_task
+    '''
     try:
         # Create signatures for the tasks
         process_pdf_task_signature = process_pdf_task.s(request.files, request.metadata)
