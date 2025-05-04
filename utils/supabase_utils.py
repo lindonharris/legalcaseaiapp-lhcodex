@@ -65,7 +65,7 @@ def insert_document_supabase_record(client, table_name, cdn_url, content_tags, u
         if response.data:
             # Successful insertion
             print("Successful Supabase row insert")
-            return response.data[0]["id"]  # Return document ID... prior version is just response.data
+            return response.data[0]["id"]  # Return document_sources.id
         else:
             # If there's no data, check for errors
             raise Exception(f"Supabase error: {response.error}")

@@ -32,7 +32,18 @@ logger = logging.getLogger(__name__)
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
 def process_pdf_task(self, files, metadata=None):
     """
-    Main Celery task to upload PDFs to S3, save to Supabase, and trigger vector embedding tasks.
+    Main Celery task to:
+        1) upload PDFs to S3, 
+        2) save to Supabase, 
+        3) and trigger vector embedding tasks.
+
+    Args:
+        files (List): Containing file CDN urls (created by WeWeb's document upload element)
+        metadata (json): 
+
+    Returns: 
+        source_ids (List): list of source ids (for later use in the celery task chord)
+        @TODO project_id: Associated project that is used
     """
 
     # === RENDER RESOURCE LOGGING (MB) === #
@@ -65,15 +76,15 @@ def process_pdf_task(self, files, metadata=None):
             s3_document_key = f"{uuid.uuid4()}{ext_ending}"
             upload_to_s3(s3_client, file_path, s3_document_key)
             
-            # Generate CloudFront URL
+            # Generate CloudFront URL 
             cloudfront_document_url = get_cloudfront_url(s3_document_key)
 
-            # Insert the document source record into Supabase
+            # Insert the document source record into Supabase (returns document_sources.id)
             source_id = insert_document_supabase_record(
                 client=supabase_client,
                 table_name="document_sources",
                 cdn_url=cloudfront_document_url,
-                content_tags=["Fitness", "Health", "Wearables"],
+                content_tags=["Fitness", "Health", "Wearables"],   # @TODO: Lets make this AI taggedeventually
                 uploaded_by=metadata.get("uploaded_by", "")
             )
 
@@ -93,7 +104,7 @@ def process_pdf_task(self, files, metadata=None):
             if file.startswith('http'):
                 os.unlink(file_path)
 
-    # Trigger the embedding task for each document
+    # Trigger the embedding task for each document (chained Celery task)
     for doc in uploaded_documents:
         chunk_and_embed_task.delay(doc["pdf_url"], doc["source_id"])      # enqueue to Celery task queue
     
@@ -101,6 +112,38 @@ def process_pdf_task(self, files, metadata=None):
     logger.info(" 'message' : PDF upload and record creation completed. Embedding tasks started.")
 
     return source_ids 
+
+@celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
+def insert_project_documents_task(self, task_results):
+    """
+    Celery task to insert a row in the join TABLE `project_documents`. Project ⇆ Documents join associates each 
+    project with N number of document_sources.
+
+    Callback task to accept the list of results from the group tasks. The results will be in the 
+    order the tasks were defined in the group.
+    
+    Args:
+        task_results: (list) containing results from process_pdf_task and validate_and_generate_audio_task
+
+    Returns: 
+        None
+    """
+    # Unpack the results
+    source_ids = task_results[0]
+    media_result = task_results[1]
+    project_id = media_result.get('media_id')
+
+    try:
+        for source_id in source_ids:
+            supabase_client.table('project_documents').insert({
+                'source_id': source_id,
+                'media_id': project_id
+            }).execute()
+        logger.info(f"Successfully linked source_ids {source_ids} with media_id {project_id}")
+    except Exception as e:
+        logger.error(f"Failed to insert into TABLE `project_documents`: {e}")
+        raise
+
 
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
 def insert_sources_media_association_task(self, task_results):
@@ -129,7 +172,8 @@ def insert_sources_media_association_task(self, task_results):
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
 def chunk_and_embed_task(self, pdf_url, source_id, chunk_size=1000, chunk_overlap=100):
     """
-    Celery task to download, chunk, embed, and store embeddings of a PDF in Supabase.
+    Celery task to download, chunk, embed, and store embeddings of a PDF in Supabase. This step involved reading 
+    the PDF contents with PyPDFLoader, but will need to be expanded to handle (.doc, .txt, .pdf (OCR), and .epub)
     """
     try:
         # Download the PDF file from the URL
@@ -140,7 +184,7 @@ def chunk_and_embed_task(self, pdf_url, source_id, chunk_size=1000, chunk_overla
         temp_file.close()
         
         # Load and split the PDF into chunks
-        loader = PyPDFLoader(temp_file.name)
+        loader = PyPDFLoader(temp_file.name)        # performs OCR/extraction
         documents = loader.load()
         text_splitter = CharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
         chunks = text_splitter.split_documents(documents)
