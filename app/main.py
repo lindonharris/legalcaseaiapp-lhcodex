@@ -87,7 +87,8 @@ class RAGRequest(BaseModel):
     conversation_id: str
     query: str
     document_ids: List[str]
-    media_id: str
+    project_id: str
+    model_type: str
 
 # ================================================ #
 #               TEST ENDPOINTS
@@ -158,14 +159,44 @@ async def celery_test_addition(request: AdditionRequest):
 # ================================================ #
 #               RAG API ENDPOINTS
 # ================================================ #
-
 @app.post("/new-rag-project/", response_model=NewRagResponse)
-async def pdf_to_dialogue(request: NewRagRequest, background_tasks: BackgroundTasks):
+async def creat_new_rag_project(request: NewRagRequest, background_tasks: BackgroundTasks):
     '''
     Endpoint to create both a RAG pipeline for AI notes in one call:
         - process_pdf_task:
             input: request.files, request.metadata
             returns: source_ids
+        
+    Request contains:
+        request.files (List): list of pdf file links
+        request.metadata (json): {
+            project_id:
+        }
+    '''
+
+    try:
+        # Upload PDFs to AWS S3, and Supabase
+        task = process_pdf_task.apply_async(
+            request.files, 
+            request.metadata
+        )  
+        
+        # Return the task ID to the client
+        return {"task_id": task.id}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
+@app.post("/new-rag-project/", response_model=NewRagResponse)
+async def creat_new_rag_project(request: NewRagRequest, background_tasks: BackgroundTasks):
+    '''
+    @INVESTIGATE: Should i use this to kill 2 birds with one stone? Using chords
+    Endpoint to create both a RAG pipeline for AI notes in one call:
+        - process_pdf_task:
+            input: request.files, request.metadata
+            returns: source_ids
+        - process_pdf_task:
+            input: source_ids
+            returns: None
         
     Request contains
     project_id
@@ -206,7 +237,7 @@ async def pdf_to_dialogue(request: NewRagRequest, background_tasks: BackgroundTa
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/add-to-rag-project/", response_model=NewRagResponse)
-async def pdf_to_dialogue(request: NewRagRequest, background_tasks: BackgroundTasks):
+async def append_sources_to_project(request: NewRagRequest, background_tasks: BackgroundTasks):
     '''
     @TODO HAVE NOT STARTED !!!
     Endpoint to add new sources to an existing RAG pipeline for AI notes in one call:
@@ -252,6 +283,24 @@ async def pdf_to_dialogue(request: NewRagRequest, background_tasks: BackgroundTa
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+@app.post("/generate-rag-note/")
+async def rag_chat(request: RAGRequest):
+    try:
+        # Trigger the RAG task asynchronously and add it to the queue
+        task = rag_chat_task.apply_async(args=[
+            request.user_id,
+            request.conversation_id,
+            request.query,
+            request.document_ids,
+            request.project_id,
+            request.model_type
+        ])
+        
+        # Return the task ID to the client
+        return {"task_id": task.id}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 @app.post("/rag-chat/")
 async def rag_chat(request: RAGRequest):
     try:
@@ -261,7 +310,7 @@ async def rag_chat(request: RAGRequest):
             request.conversation_id,
             request.query,
             request.document_ids,
-            request.media_id
+            request.project_id
         ])
         
         # Return the task ID to the client
