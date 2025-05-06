@@ -248,37 +248,6 @@ def process_pdf_task_OLD(self, files, metadata=None):
 
     return source_ids 
 
-# @celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
-# def insert_project_documents_task(self, task_results):
-#     """
-#     Celery task to insert a row in the join TABLE `project_documents`. Project ⇆ Documents join associates each 
-#     project with N number of document_sources.
-
-#     Callback task to accept the list of results from the group tasks. The results will be in the 
-#     order the tasks were defined in the group.
-    
-#     Args:
-#         task_results: (list) containing results from process_pdf_task and validate_and_generate_audio_task
-
-#     Returns: 
-#         None
-#     """
-#     # Unpack the results
-#     source_ids = task_results[0]
-#     media_result = task_results[1]
-#     project_id = media_result.get('media_id')
-
-#     try:
-#         for source_id in source_ids:
-#             supabase_client.table('project_documents').insert({
-#                 'source_id': source_id,
-#                 'media_id': project_id
-#             }).execute()
-#         logger.info(f"Successfully linked source_ids {source_ids} with media_id {project_id}")
-#     except Exception as e:
-#         logger.error(f"Failed to insert into TABLE `project_documents`: {e}")
-#         raise
-
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
 def insert_sources_media_association_task(self, task_results):
     """
@@ -302,72 +271,6 @@ def insert_sources_media_association_task(self, task_results):
     except Exception as e:
         logger.error(f"Failed to insert into sources_media_association: {e}")
         raise
-
-@celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
-def chunk_and_embed_task_DEPR(self, pdf_url, source_id, chunk_size=1000, chunk_overlap=100):
-    """
-    Celery task to download, chunk, embed, and store embeddings of a PDF in Supabase. This step involved reading 
-    the PDF contents with PyPDFLoader, but will need to be expanded to handle (.doc, .txt, .pdf (OCR), and .epub)
-    """
-    temp_file = None
-    try:
-        # 1) Download PDF
-        response = requests.get(pdf_url)
-        response.raise_for_status()
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-        temp_file.write(response.content)
-        temp_file.close()
-
-        # 2) Load & split into chunks
-        loader = PyPDFLoader(temp_file.name)
-        documents = loader.load()
-        text_splitter = CharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-        chunks = text_splitter.split_documents(documents)
-
-        # 3) Prepare texts and metadata for batch embedding
-        texts = [chunk.page_content for chunk in chunks]
-        metadatas = [
-            {
-                "source": pdf_url,
-                "page_number": chunk.metadata.get("page", None)
-            }
-            for chunk in chunks
-        ]
-
-        # 4) Batch embed all chunks in one call
-        embedding_model = OpenAIEmbeddings()
-        embeddings = embedding_model.embed_documents(texts)
-
-        # 5) Build rows for bulk insert
-        vector_rows = []
-        for text, meta, vector in zip(texts, metadatas, embeddings):
-            vector_rows.append({
-                "source_id": source_id,
-                "content": text,
-                "metadata": meta,
-                "embedding": vector
-            })
-
-        # 6) Bulk insert into Supabase
-        resp = supabase_client.table("document_vector_store") \
-                             .insert(vector_rows) \
-                             .execute()
-        if resp.error:
-            logger.error(f"Supabase bulk vector insert failed: {resp.error}")
-            raise Exception(resp.error)
-
-        logger.info(f"Inserted {len(vector_rows)} embeddings for source_id={source_id}")
-
-    except Exception as e:
-        logger.error(f"Failed chunk/embed for {pdf_url}: {e}", exc_info=True)
-        raise
-    finally:
-        # 7) Cleanup temp file
-        if temp_file is not None:
-            try:
-                os.unlink(temp_file.name)
-            except OSError:
-                pass
 
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
 def chunk_and_embed_task(self, pdf_url, source_id, chunk_size=1000, chunk_overlap=100):
