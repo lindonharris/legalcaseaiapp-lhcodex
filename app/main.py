@@ -173,21 +173,16 @@ async def creat_new_rag_project(request: NewRagRequest, background_tasks: Backgr
             project_id:
         }
     '''
-
     try:
-        # Upload PDFs to AWS S3, and Supabase
-        task = process_pdf_task.apply_async(
-            request.files, 
-            request.metadata
-        )  
-        
-        # Return the task ID to the client
-        return {"task_id": task.id}
+        job = process_pdf_task.apply_async(
+            args=[request.files, request.metadata]
+        )
+        return {"task_id": job.id}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
     
 @app.post("/new-rag-project/", response_model=NewRagResponse)
-async def creat_new_rag_project(request: NewRagRequest, background_tasks: BackgroundTasks):
+async def create_new_rag_project_DEPR(request: NewRagRequest, background_tasks: BackgroundTasks):
     '''
     @INVESTIGATE: Should i use this to kill 2 birds with one stone? Using chords
     Endpoint to create both a RAG pipeline for AI notes in one call:
