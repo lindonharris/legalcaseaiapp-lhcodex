@@ -36,6 +36,7 @@ def process_pdf_task(self, files, metadata=None):
         1) upload PDFs to S3, 
         2) save to Supabase, 
         3) and trigger vector embedding tasks.
+    Typically used to upload documents for creation of a new "RAG project"
 
     Args:
         files (List): Containing file CDN urls (created by WeWeb's document upload element)
