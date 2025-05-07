@@ -36,6 +36,7 @@ def process_pdf_task(self, files, metadata=None):
         1) upload PDFs to S3, 
         2) save to Supabase, 
         3) and trigger vector embedding tasks.
+    Typically used to upload documents for creation of a new "RAG project"
 
     Args:
         files (List): Containing file CDN urls (created by WeWeb's document upload element)
@@ -142,7 +143,6 @@ def process_pdf_task(self, files, metadata=None):
 
     logger.info(f"{self.name} completed successfully.")
     return source_ids
-
 
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
 def process_pdf_task_OLD(self, files, metadata=None):

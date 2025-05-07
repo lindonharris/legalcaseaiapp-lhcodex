@@ -1,6 +1,5 @@
 '''
-This file runs Celery tasks for handling RAG chat tasks (non-streaming LLM responses)
-Handles RAG chat tasks without token streaming. Returns full answer in one go.
+This file runs Celery tasks for handling RAG chat tasks with token streaming enabled
 '''
 
 from celery import Celery, Task
@@ -63,12 +62,12 @@ def get_chat_llm(model_name: str, callback_manager: CallbackManager = None) -> C
     return ChatOpenAI(
         model=model_name,
         temperature=0.7,
-        streaming=False,                            # Disable streaming if callbacks exist
-        callback_manager=None                       # attaches our StreamToClientHandler
+        streaming=(callback_manager is not None),  # toggle streaming if callbacks exist
+        callback_manager=callback_manager        # attaches our StreamToClientHandler
     )
 
 @celery_app.task(bind=True, base=BaseTaskWithRetry)
-def rag_chat_task(self, user_id, chat_session_id, query, project_id, model_type):
+def rag_chat_streaming_task(self, user_id, chat_session_id, query, project_id, model_type):
     """
     Main RAG workflow:
     1. Ensure a chat session exists
@@ -139,22 +138,22 @@ def generate_rag_answer(query, conversation_id, relevant_chunks, model_name, max
     full_context = trim_context_length(full_context, query, relevant_chunks, model_name, max_tokens=127999)
 
     # Set up streaming callback for token-level pushes
-    # handler = StreamToClientHandler(conversation_id)                     # Disabled, no token streaming
-    # cb_manager = CallbackManager([handler])                              # Disabled, no token streaming
-    llm = get_chat_llm(model_name)
+    handler = StreamToClientHandler(conversation_id)
+    cb_manager = CallbackManager([handler])
+    llm = get_chat_llm(model_name, callback_manager=cb_manager)
 
     # Streaming prediction: on_llm_new_token fires for each token
     answer = llm.predict(full_context)
     return answer
 
-def create_new_conversation(user_id, project_id):
+def create_new_conversation(user_id, document_ids):
     """
     Inserts a new row into chat_session and returns its UUID.
     """
     new_chat_session = {
         "user_id": user_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "project_id": project_id
+        "document_ids": document_ids
     }
     response = supabase_client.table("chat_session").insert(new_chat_session).execute()
     return response.data[0]["id"]
