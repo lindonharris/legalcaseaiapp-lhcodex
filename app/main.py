@@ -8,7 +8,8 @@ from utils.pdf_utils import extract_text_from_pdf
 from tasks.podcast_generate_tasks import validate_and_generate_audio_task, generate_dialogue_only_task
 from tasks.upload_tasks import process_pdf_task, insert_sources_media_association_task, insert_project_documents_task
 from tasks.test_tasks import addition_task
-from tasks.chat_streaming_tasks import rag_chat_task
+from tasks.chat_streaming_tasks import rag_chat_streaming_task
+from tasks.chat_tasks import rag_chat_task
 from celery import chain, chord, group
 from celery.result import AsyncResult
 
@@ -73,7 +74,7 @@ class NewRagPipelineRequest(BaseModel):
     metadata: Dict[str, Any]  # A dictionary for any metadata information
 
 # New RAG pipeline response model
-class NewRagResponse(BaseModel):
+class NewRagPipelineResponse(BaseModel):
     embedding_task_id: str      # from vector embedding task
 
 # Pydantic model for the response
@@ -86,7 +87,7 @@ class RagQueryRequest(BaseModel):
     user_id: str
     conversation_id: str
     query: str
-    document_ids: List[str]
+    # document_ids: List[str]
     project_id: str
     model_type: str
 
@@ -159,7 +160,7 @@ async def celery_test_addition(request: AdditionRequest):
 # ================================================ #
 #               RAG API ENDPOINTS
 # ================================================ #
-@app.post("/new-rag-project/", response_model=NewRagResponse)
+@app.post("/new-rag-project/", response_model=NewRagPipelineResponse)
 async def creat_new_rag_project(request: NewRagPipelineRequest, background_tasks: BackgroundTasks):
     '''
     Endpoint to create both a RAG pipeline for AI notes in one call:
@@ -181,7 +182,7 @@ async def creat_new_rag_project(request: NewRagPipelineRequest, background_tasks
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     
-@app.post("/new-rag-project-deprecated/", response_model=NewRagResponse)
+@app.post("/new-rag-project-deprecated/", response_model=NewRagPipelineResponse)
 async def create_new_rag_project_DEPR(request: NewRagPipelineRequest, background_tasks: BackgroundTasks):
     '''
     @INVESTIGATE: Should i use this to kill 2 birds with one stone? Using chords
@@ -231,7 +232,7 @@ async def create_new_rag_project_DEPR(request: NewRagPipelineRequest, background
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.post("/add-to-rag-project/", response_model=NewRagResponse)
+@app.post("/add-to-rag-project/", response_model=NewRagPipelineResponse)
 async def append_sources_to_project(request: NewRagPipelineRequest, background_tasks: BackgroundTasks):
     '''
     @TODO HAVE NOT STARTED !!!
@@ -279,7 +280,7 @@ async def append_sources_to_project(request: NewRagPipelineRequest, background_t
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/generate-rag-note/")
-async def rag_chat(request: RagQueryRequest):
+async def generate_rag_note(request: RagQueryRequest):
     try:
         # Trigger the RAG task asynchronously and add it to the queue
         task = rag_chat_task.apply_async(args=[
@@ -298,9 +299,29 @@ async def rag_chat(request: RagQueryRequest):
 
 @app.post("/rag-chat/")
 async def rag_chat(request: RagQueryRequest):
+    """Endpoint for the rag query responses (token streaming not enabled)"""
     try:
         # Trigger the RAG task asynchronously and add it to the queue
         task = rag_chat_task.apply_async(args=[
+            request.user_id,
+            request.conversation_id,
+            request.query,
+            request.document_ids,
+            request.project_id,
+            request.model_type
+        ])
+        
+        # Return the task ID to the client
+        return {"task_id": task.id}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/rag-chat-stream/")
+async def rag_chat_stream(request: RagQueryRequest):
+    """Endpoint for the rag query responses (token streaming not ENABLED), still a work in progress"""
+    try:
+        # Trigger the RAG task asynchronously and add it to the queue
+        task = rag_chat_streaming_task.apply_async(args=[
             request.user_id,
             request.conversation_id,
             request.query,
@@ -315,7 +336,7 @@ async def rag_chat(request: RagQueryRequest):
 
 @app.get("/rag-chat-status/{task_id}")
 async def get_rag_chat_status(task_id: str):
-    """Endpoint to check the status and result of the RAG chat task."""
+    """Endpoint to check the status and result of the rag_chat_task.run() task."""
     result = AsyncResult(task_id)
     if result.state == "SUCCESS":
         return {"status": result.state, "result": result.result}

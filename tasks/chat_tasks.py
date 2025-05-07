@@ -1,5 +1,6 @@
 '''
 This file runs Celery tasks for handling RAG chat tasks (non-streaming LLM responses)
+Handles RAG chat tasks without token streaming. Returns full answer in one go.
 '''
 
 from celery import Celery, Task
@@ -62,8 +63,8 @@ def get_chat_llm(model_name: str, callback_manager: CallbackManager = None) -> C
     return ChatOpenAI(
         model=model_name,
         temperature=0.7,
-        streaming=(callback_manager is not None),  # toggle streaming if callbacks exist
-        callback_manager=callback_manager        # attaches our StreamToClientHandler
+        streaming=False,                            # Disable streaming if callbacks exist
+        callback_manager=None                       # attaches our StreamToClientHandler
     )
 
 @celery_app.task(bind=True, base=BaseTaskWithRetry)
@@ -138,9 +139,9 @@ def generate_rag_answer(query, conversation_id, relevant_chunks, model_name, max
     full_context = trim_context_length(full_context, query, relevant_chunks, model_name, max_tokens=127999)
 
     # Set up streaming callback for token-level pushes
-    handler = StreamToClientHandler(conversation_id)
-    cb_manager = CallbackManager([handler])
-    llm = get_chat_llm(model_name, callback_manager=cb_manager)
+    # handler = StreamToClientHandler(conversation_id)                     # Disabled, no token streaming
+    # cb_manager = CallbackManager([handler])                              # Disabled, no token streaming
+    llm = get_chat_llm(model_name)
 
     # Streaming prediction: on_llm_new_token fires for each token
     answer = llm.predict(full_context)

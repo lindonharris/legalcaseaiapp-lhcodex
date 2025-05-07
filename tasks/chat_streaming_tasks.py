@@ -67,7 +67,7 @@ def get_chat_llm(model_name: str, callback_manager: CallbackManager = None) -> C
     )
 
 @celery_app.task(bind=True, base=BaseTaskWithRetry)
-def rag_chat_task(self, user_id, chat_session_id, query, document_ids, project_id, model_type):
+def rag_chat_streaming_task(self, user_id, chat_session_id, query, project_id, model_type):
     """
     Main RAG workflow:
     1. Ensure a chat session exists
@@ -79,7 +79,7 @@ def rag_chat_task(self, user_id, chat_session_id, query, document_ids, project_i
     try:
         # 1) Initialize or create conversation if needed
         if not chat_session_id:
-            chat_session_id = create_new_conversation(user_id, document_ids)
+            chat_session_id = create_new_conversation(user_id, project_id)
 
         # 2) Embed the query using OpenAI Ada embeddings (1536 dims)
         embedding_model = OpenAIEmbeddings(model="text-embedding-ada-002")
