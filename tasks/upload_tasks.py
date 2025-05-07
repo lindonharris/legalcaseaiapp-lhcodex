@@ -305,8 +305,13 @@ def chunk_and_embed_task(self, pdf_url, source_id, chunk_size=1000, chunk_overla
         ]
 
         # 4) Batch embed all chunks in one call
-        embedding_model = OpenAIEmbeddings()
+        embedding_model = OpenAIEmbeddings(model="text-embedding-ada-002")
         embeddings = embedding_model.embed_documents(texts)
+
+        # Guard against any mis-shape
+        for i, vec in enumerate(embeddings):
+            if len(vec) != 1536:
+                raise ValueError(f"Embedding #{i} has length {len(vec)}; expected 1536")
 
         # 5) Build rows for bulk insert
         vector_rows = []
