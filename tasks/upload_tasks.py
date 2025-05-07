@@ -136,7 +136,7 @@ def process_pdf_task(self, files, metadata=None):
     # === 4) Kick off embedding tasks ===
     for sid, row in zip(source_ids, rows_to_insert):
         try:
-            chunk_and_embed_task.delay(row["cdn_url"], sid)
+            chunk_and_embed_task.delay(row["cdn_url"], sid, metadata["project_id"])
             logger.info(f"Enqueued embed task for source_id={sid}")
         except Exception as e:
             logger.error(f"[Celery] Failed to enqueue embed for {sid}: {e}", exc_info=True)
@@ -144,109 +144,109 @@ def process_pdf_task(self, files, metadata=None):
     logger.info(f"{self.name} completed successfully.")
     return source_ids
 
-@celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
-def process_pdf_task_OLD(self, files, metadata=None):
-    """
-    Main Celery task to:
-        1) upload PDFs to S3, 
-        2) save to Supabase, 
-        3) and trigger vector embedding tasks.
+# @celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
+# def process_pdf_task_OLD(self, files, metadata=None):
+#     """
+#     Main Celery task to:
+#         1) upload PDFs to S3, 
+#         2) save to Supabase, 
+#         3) and trigger vector embedding tasks.
 
-    Args:
-        files (List): Containing file CDN urls (created by WeWeb's document upload element)
-        metadata (json): {
-            'user_id': UUID,
-            'project_id': UUID,
-            'model_type': 'gpt-4o', 'llama3.1'...,
-            'note_type': 'case_summary'
-        }
+#     Args:
+#         files (List): Containing file CDN urls (created by WeWeb's document upload element)
+#         metadata (json): {
+#             'user_id': UUID,
+#             'project_id': UUID,
+#             'model_type': 'gpt-4o', 'llama3.1'...,
+#             'note_type': 'case_summary'
+#         }
 
-    Returns: 
-        source_ids (List): list of source ids (for later use in the celery task chord)
-        @TODO project_id: Associated project that is used
-    """
+#     Returns: 
+#         source_ids (List): list of source ids (for later use in the celery task chord)
+#         @TODO project_id: Associated project that is used
+#     """
 
-    # === RENDER RESOURCE LOGGING (MB) === #
-    process = psutil.Process(os.getpid())
-    mem_before = process.memory_info().rss
-    logger.info(f"Starting {self.name} with files: {files} and metadata: {metadata}")
-    logger.info(f"Memory usage before task: {mem_before / (1024 * 1024)} MB")
+#     # === RENDER RESOURCE LOGGING (MB) === #
+#     process = psutil.Process(os.getpid())
+#     mem_before = process.memory_info().rss
+#     logger.info(f"Starting {self.name} with files: {files} and metadata: {metadata}")
+#     logger.info(f"Memory usage before task: {mem_before / (1024 * 1024)} MB")
 
-    if not files:
-        return {"error": "Please upload at least one PDF file before processing."}
+#     if not files:
+#         return {"error": "Please upload at least one PDF file before processing."}
 
-    uploaded_documents = []
-    source_ids = [] # used in chained task
+#     uploaded_documents = []
+#     source_ids = [] # used in chained task
 
     
-    rows_to_insert = []
-    temp_paths = []  # keep track of temps for cleanup
+#     rows_to_insert = []
+#     temp_paths = []  # keep track of temps for cleanup
 
-    # 1) Upload to S3 + build CloudFront URLs, but _don’t_ yet insert into Supabase
-    for file in files:
-        try:
-            # Handle URL or local file path
-            if file.startswith('http://') or file.startswith('https://'):
-                response = requests.get(file)
-                response.raise_for_status()
-                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-                temp_file.write(response.content)
-                temp_file.close()
-                file_path = temp_file.name
-            else:
-                file_path = file
+#     # 1) Upload to S3 + build CloudFront URLs, but _don’t_ yet insert into Supabase
+#     for file in files:
+#         try:
+#             # Handle URL or local file path
+#             if file.startswith('http://') or file.startswith('https://'):
+#                 response = requests.get(file)
+#                 response.raise_for_status()
+#                 temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+#                 temp_file.write(response.content)
+#                 temp_file.close()
+#                 file_path = temp_file.name
+#             else:
+#                 file_path = file
 
-            # Generate S3 key and upload file
-            ext_ending = os.path.splitext(file_path)[1]
-            s3_document_key = f"{uuid.uuid4()}{ext_ending}"
-            upload_to_s3(s3_client, file_path, s3_document_key)
+#             # Generate S3 key and upload file
+#             ext_ending = os.path.splitext(file_path)[1]
+#             s3_document_key = f"{uuid.uuid4()}{ext_ending}"
+#             upload_to_s3(s3_client, file_path, s3_document_key)
             
-            # Generate CloudFront URL 
-            cloudfront_document_url = get_cloudfront_url(s3_document_key)
+#             # Generate CloudFront URL 
+#             cloudfront_document_url = get_cloudfront_url(s3_document_key)
 
-            rows_to_insert.append({
-                "cdn_url": cloudfront_document_url,
-                "project_id": metadata["project_id"],
-                "content_tags": ["Fitness", "Health", "Wearables"],
-                "uploaded_by": metadata["user_id"],
-            })
-            # (Optionally track temp paths for later cleanup)
-            temp_paths.append(file_path)
+#             rows_to_insert.append({
+#                 "cdn_url": cloudfront_document_url,
+#                 "project_id": metadata["project_id"],
+#                 "content_tags": ["Fitness", "Health", "Wearables"],
+#                 "uploaded_by": metadata["user_id"],
+#             })
+#             # (Optionally track temp paths for later cleanup)
+#             temp_paths.append(file_path)
 
-        # Insert the document source record into Supabase (returns document_sources.id)
-            source_id = insert_document_supabase_record(
-                client=supabase_client,
-                table_name="document_sources",
-                cdn_url=cloudfront_document_url,
-                project_id=metadata.get("project_id", ""),
-                content_tags=["Fitness", "Health", "Wearables"],   # @TODO: Lets make this AI taggedeventually
-                uploaded_by=metadata.get("user_id", "")
-            )
+#         # Insert the document source record into Supabase (returns document_sources.id)
+#             source_id = insert_document_supabase_record(
+#                 client=supabase_client,
+#                 table_name="document_sources",
+#                 cdn_url=cloudfront_document_url,
+#                 project_id=metadata.get("project_id", ""),
+#                 content_tags=["Fitness", "Health", "Wearables"],   # @TODO: Lets make this AI taggedeventually
+#                 uploaded_by=metadata.get("user_id", "")
+#             )
 
-            # Append to source_ids list
-            source_ids.append(source_id)
+#             # Append to source_ids list
+#             source_ids.append(source_id)
 
-            uploaded_documents.append({
-                "source_id": source_id,
-                "pdf_url": cloudfront_document_url,
-                "file_path": file_path
-            })
+#             uploaded_documents.append({
+#                 "source_id": source_id,
+#                 "pdf_url": cloudfront_document_url,
+#                 "file_path": file_path
+#             })
 
-        except Exception as e:
-            logger.error(f"Failed to upload and record file {file}: {e}", exc_info=True)
-        finally:
-            # Clean up temporary files if necessary
-            if file.startswith('http'):
-                os.unlink(file_path)
+#         except Exception as e:
+#             logger.error(f"Failed to upload and record file {file}: {e}", exc_info=True)
+#         finally:
+#             # Clean up temporary files if necessary
+#             if file.startswith('http'):
+#                 os.unlink(file_path)
 
-    # Trigger the embedding task for each document (chained Celery task)
-    for doc in uploaded_documents:
-        chunk_and_embed_task.delay(doc["pdf_url"], doc["source_id"])      # enqueue to Celery task queue
+#     # Trigger the embedding task for each document (chained Celery task)
+#     for doc in uploaded_documents:
+#         chunk_and_embed_task.delay(doc["pdf_url"], doc["source_id"])      # enqueue to Celery task queue
     
-    # Logging message
-    logger.info(" 'message' : PDF upload and record creation completed. Embedding tasks started.")
+#     # Logging message
+#     logger.info(" 'message' : PDF upload and record creation completed. Embedding tasks started.")
 
-    return source_ids 
+#     return source_ids 
 
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
 def insert_sources_media_association_task(self, task_results):
@@ -273,7 +273,7 @@ def insert_sources_media_association_task(self, task_results):
         raise
 
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
-def chunk_and_embed_task(self, pdf_url, source_id, chunk_size=1000, chunk_overlap=100):
+def chunk_and_embed_task(self, pdf_url, source_id, project_id, chunk_size=1000, chunk_overlap=100):
     """
     Celery task to download, chunk, embed, and store embeddings of a PDF in Supabase. This step involved reading 
     the PDF contents with PyPDFLoader, but will need to be expanded to handle (.doc, .txt, .pdf (OCR), and .epub)
@@ -319,7 +319,8 @@ def chunk_and_embed_task(self, pdf_url, source_id, chunk_size=1000, chunk_overla
                 "source_id": source_id,
                 "content": text,
                 "metadata": meta,
-                "embedding": vector
+                "embedding": vector,
+                "project_id": project_id
             })
 
         # 6) Bulk insert into Supabase

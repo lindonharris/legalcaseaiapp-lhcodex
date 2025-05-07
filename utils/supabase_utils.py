@@ -73,24 +73,27 @@ def insert_document_supabase_record(client, table_name, cdn_url, project_id, con
     except Exception as e:
         raise Exception(f"Failed to insert into Supabase: {e}")
 
-def insert_vector_supabase_record(client, table_name, source_id, content, metadata, embedding):
+def insert_vector_supabase_record(client, table_name, source_id, project_id, content, metadata, embedding):
+    '''INSERT into table public.document_vector_store'''
     try:
         response = client.table(table_name).insert({
             "source_id": source_id,
             "content": content,
             "metadata": json.dumps(metadata),
-            "embedding": embedding
+            "embedding": embedding,
+            "project_id": project_id
         }).execute()
     except Exception as e:
         raise Exception(f"Failed to insert into Supabase vector-store: {e}")
     
-def insert_conversation_supabase_record(client, table_name, user_id, conversation_id, message_role, message_content, created_at):
+def insert_conversation_supabase_record(client, table_name, user_id, chat_session_id, dialogue_role, message_content, created_at):
+    '''INSERT into table public.messages'''
     try:
         response = client.table(table_name).insert({
             "user_id": user_id,
-            "conversation_id": conversation_id,
-            "message_role": message_role,
-            "message_content": message_content,
+            "chat_session_id": chat_session_id,
+            "role": dialogue_role,
+            "content": message_content,
             "created_at": created_at,
         }).execute()
     except Exception as e:

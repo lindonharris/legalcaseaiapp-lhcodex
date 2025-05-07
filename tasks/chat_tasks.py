@@ -123,13 +123,13 @@ def fetch_relevant_chunks(query_embedding, project_id, match_count=10):
         logger.error(f"Error fetching relevant chunks: {e}", exc_info=True)
         raise
 
-def generate_rag_answer(query, conversation_id, relevant_chunks, model_name, max_chat_history=10):
+def generate_rag_answer(query, chat_session_id, relevant_chunks, model_name, max_chat_history=10):
     """
     Build prompt, invoke streaming LLM, publish tokens in real-time,
     and return the full generated answer at completion.
     """
     # Build conversational context
-    chat_history = fetch_chat_history(conversation_id)[-max_chat_history:]
+    chat_history = fetch_chat_history(chat_session_id)[-max_chat_history:]
     formatted_history = format_chat_history(chat_history) if chat_history else ""
     chunk_context = "\n\n".join(c["content"] for c in relevant_chunks)
     full_context = (
@@ -159,7 +159,7 @@ def create_new_conversation(user_id, project_id):
     response = supabase_client.table("chat_session").insert(new_chat_session).execute()
     return response.data[0]["id"]
 
-def save_conversation(conversation_id, user_id, query, answer):
+def save_conversation(chat_session_id, user_id, query, answer):
     """
     Persists user and assistant messages into Supabase messages table.
     """
@@ -167,8 +167,8 @@ def save_conversation(conversation_id, user_id, query, answer):
         supabase_client,
         table_name="message",
         user_id=user_id,
-        conversation_id=conversation_id,
-        message_role="user",
+        chat_session_id=chat_session_id,
+        dialogue_role="user",
         message_content=query,
         created_at=datetime.now(timezone.utc).isoformat()
     )
@@ -176,8 +176,8 @@ def save_conversation(conversation_id, user_id, query, answer):
         supabase_client,
         table_name="message",
         user_id=user_id,
-        conversation_id=conversation_id,
-        message_role="assistant",
+        chat_session_id=chat_session_id,
+        dialogue_role="assistant",
         message_content=answer,
         created_at=datetime.now(timezone.utc).isoformat()
     )
