@@ -6,248 +6,268 @@ from celery import Celery, Task
 from tasks.celery_app import celery_app  # Import the Celery app instance (see celery_app.py for LocalHost config)
 import logging
 import os
-from langchain_core.load import dumpd, dumps, load, loads
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from langchain.prompts import PromptTemplate
-from langchain.schema import AIMessage
 from supabase import create_client, Client
 from utils.supabase_utils import insert_conversation_supabase_record, supabase_client
 from datetime import datetime, timezone
+import requests
+import tempfile
 import uuid
 import json
 
-# from celery import Celery, chain
-# import logging
-# import os
-# import json
-# import psutil
-# import requests
-# import tempfile
-# from tasks.celery_app import celery_app  # Import the Celery app instance (see celery_app.py for LocalHost config)
-# from utils.audio_utils import generate_audio, generate_only_dialogue_text
-# from utils.s3_utils import upload_to_s3, s3_client, s3_bucket_name
-# from utils.supabase_utils import insert_conversation_supabase_record, supabase_client
-# from utils.cloudfront_utils import get_cloudfront_url
-# from utils.instruction_templates import INSTRUCTION_TEMPLATES
-# from time import sleep
-# from datetime import datetime, timezone
-# import uuid
-
-# # langchain dependencies
-# from langchain.text_splitter import CharacterTextSplitter
-# from langchain_openai import OpenAIEmbeddings
-# from langchain_community.document_loaders import PyPDFLoader
+# langchain imports
+from langchain_core.load import dumpd
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain.prompts import PromptTemplate
+from langchain.schema import AIMessage
+from langchain.callbacks.base import BaseCallbackHandler
+from langchain.callbacks.manager import CallbackManager
+from langchain.document_loaders import PyPDFLoader
+from langchain.text_splitter import CharacterTextSplitter
 
 logger = logging.getLogger(__name__)
 
 class BaseTaskWithRetry(Task):
+    """
+    Base Celery Task class enabling automatic retries on exceptions.
+    """
     autoretry_for = (Exception,)
     retry_backoff = True
     retry_kwargs = {"max_retries": 5}
     retry_jitter = True
 
-@celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
-def rag_chat_task(self, user_id, conversation_id, query, document_ids, project_id, model_type):
-    """
-    MAIN Celery task for handling RAG (Retrieval-Augmented Generation) chatbot logic.
 
-    example json body from the front-end
-    {
-        "user_id": "user-32kfowdkbf0ouskhw9hs-sk",
-        "conversation_id": "conv456",      // Or leave empty for a new conversation
-        "query": "What were the results of the researchers' conclusion?",
-        "document_ids": ["fjs78dkbf9fksfnuhis-89s", "789s-khw9hdfjksdjhk9sdh"]
-        "project_id": "vjkbnoasdf7y892wb", 
-        "model_type": "deepseek-v3"
-    }
+def publish_token(chat_session_id: str, token: str):
+    """
+    Stub function to publish a single token to clients subscribed to a chat session.
+    Replace with actual pub/sub (e.g. Redis, Supabase Realtime).
+    """
+    # Example: redis.publish(f"chat:{chat_session_id}", token)
+    pass
+
+class StreamToClientHandler(BaseCallbackHandler):
+    """
+    LangChain callback handler that emits each new LLM token via publish_token().
+    """
+    def __init__(self, session_id: str):
+        self.session_id = session_id
+
+    def on_llm_new_token(self, token: str, **kwargs) -> None:
+        # Called by LangChain for every new token in streaming mode
+        publish_token(self.session_id, token)
+
+
+def get_chat_llm(model_name: str, callback_manager: CallbackManager = None) -> ChatOpenAI:
+    """
+    Factory to create a ChatOpenAI instance.
+    If callback_manager is provided, enable streaming and attach handlers.
+    """
+    return ChatOpenAI(
+        model=model_name,
+        temperature=0.7,
+        streaming=(callback_manager is not None),  # toggle streaming if callbacks exist
+        callback_manager=callback_manager        # attaches our StreamToClientHandler
+    )
+
+@celery_app.task(bind=True, base=BaseTaskWithRetry)
+def rag_chat_task(self, user_id, chat_session_id, query, document_ids, project_id, model_type):
+    """
+    Main RAG workflow:
+    1. Ensure a chat session exists
+    2. Embed the user query
+    3. Retrieve relevant document chunks
+    4. Stream LLM response tokens to client and collect full answer
+    5. Persist query and answer in Supabase
     """
     try:
-        # Step 1: Handle first-time chat session (create new conversation if needed)
-        if not conversation_id:
-            conversation_id = create_new_conversation(user_id, document_ids, media_id)
+        # 1) Initialize or create conversation if needed
+        if not chat_session_id:
+            chat_session_id = create_new_conversation(user_id, document_ids)
 
-        # Step 2: Vectorize the query
-        embedding_model = OpenAIEmbeddings()
+        # 2) Embed the query using OpenAI Ada embeddings (1536 dims)
+        embedding_model = OpenAIEmbeddings(model="text-embedding-ada-002")
         query_embedding = embedding_model.embed_query(query)
 
-        # Step 3: Fetch relevant document chunks
-        relevant_chunks = fetch_relevant_chunks(query_embedding, document_ids)
+        # 3) Fetch top-K relevant chunks via Supabase RPC
+        relevant_chunks = fetch_relevant_chunks(query_embedding, project_id)
 
-        # Step 4: Generate the answer using RAG
-        response = generate_rag_answer(query, conversation_id, relevant_chunks, model_name='gpt-4o-mini')
+        # 4) Stream generation to client, accumulate full answer
+        full_answer = generate_rag_answer(
+            query,
+            chat_session_id,
+            relevant_chunks,
+            model_name=model_type  # supports gpt-4o, gemini-flash, deepseek-v3, etc.
+        )
 
-        # Step 4.1: Extract the message content from the AIMessage object
-        json_dict = dumpd(response)
-        try:
-            json_content = json_dict['kwargs']['content']  # Adjust keys based on actual nesting
-            # print("\nContent:", json_content)
-        except KeyError as e:
-            print(f"KeyError: {e} - Make sure the key exists in the structure.")
+        # 5) Save entire conversation turn in DB
+        save_conversation(chat_session_id, user_id, query, answer=full_answer)
 
-        # Step 5: Save query and response in message history
-        save_conversation(conversation_id, user_id, query, answer=json_content)
+        # Return completed answer for HTTP response
+        return {"answer": full_answer, "message_role": "assistant"}
 
-        # Api call returns the answer and metadata for UI formatting
-        json_response = {}
-        try:
-            json_response = {
-            "answer": json_content,
-            "message_role": "assistant"
-            }
-        except KeyError as e:
-            print(f"KeyError: {e} - Make sure the key exists in the structure.")
-        
-        return json_response
     except Exception as e:
-        logger.error(f"RAG Chat Task failed: {str(e)}", exc_info=True)
+        logger.error(f"RAG Chat Task failed: {e}", exc_info=True)
+        # Retry on failure according to BaseTaskWithRetry policies
         raise self.retry(exc=e)
 
-def create_new_conversation(user_id, document_ids, media_id):
+
+@celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
+def chunk_and_embed_task(self, pdf_url, source_id, chunk_size=1000, chunk_overlap=100):
     """
-    Create a new conversation in the `conversations` table.
+    Download a PDF, split into chunks, embed with OpenAI, and bulk-insert into Supabase.
+    Includes a dimension check to ensure embeddings match vector(1536).
     """
-    new_conversation = {
-        "user_id": user_id,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "document_ids": document_ids,
-        "media_id":media_id                     # ...needs to be here i believe
-    }
+    temp_file = None
     try:
-        response = supabase_client.table("conversations").insert(new_conversation).execute()
-        return response.data[0]["id"]
+        # Download PDF to temp file
+        response = requests.get(pdf_url)
+        response.raise_for_status()
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+        temp_file.write(response.content)
+        temp_file.close()
+
+        # Chunk PDF content
+        loader = PyPDFLoader(temp_file.name)
+        documents = loader.load()
+        splitter = CharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+        chunks = splitter.split_documents(documents)
+
+        texts = [c.page_content for c in chunks]
+        metadatas = [{"source": pdf_url, "page_number": c.metadata.get("page")} for c in chunks]
+
+        # Batch embed documents
+        embedding_model = OpenAIEmbeddings(model="text-embedding-ada-002")
+        embeddings = embedding_model.embed_documents(texts)
+
+        # Dimension guard: must be exactly 1536 floats
+        for idx, vec in enumerate(embeddings):
+            if len(vec) != 1536:
+                raise ValueError(f"Embedding length mismatch: expected 1536, got {len(vec)} at index {idx}")
+
+        # Prepare rows and bulk insert
+        vector_rows = [
+            {"source_id": source_id, "content": t, "metadata": m, "embedding": v}
+            for t, m, v in zip(texts, metadatas, embeddings)
+        ]
+        resp = supabase_client.table("document_vector_store").insert(vector_rows).execute()
+        if resp.error:
+            logger.error(f"Supabase bulk vector insert failed: {resp.error}")
+            raise Exception(resp.error)
+
+        logger.info(f"Inserted {len(vector_rows)} embeddings for source_id={source_id}")
+
     except Exception as e:
-        logger.error(f"Error creating new conversation: {str(e)}", exc_info=True)
+        logger.error(f"Failed chunk/embed for {pdf_url}: {e}", exc_info=True)
         raise
 
-def fetch_relevant_chunks(query_embedding, document_ids, match_count=3):
+    finally:
+        # Clean up temp file
+        if temp_file:
+            try:
+                os.unlink(temp_file.name)
+            except OSError:
+                pass
+
+def fetch_relevant_chunks(query_embedding, project_id, match_count=10):
     """
-    Fetch the most relevant document chunks from the Supabase vector store.
+    Calls Supabase RPC to retrieve the nearest neighbor chunks using HNSW index.
     """
     try:
-        response = supabase_client.rpc("match_document_chunks", {
-            "query_embedding": query_embedding,
-            "document_ids": document_ids,
-            "match_count": match_count
+        response = supabase_client.rpc("match_document_chunks_hnsw", {
+            "p_project_id": project_id,
+            "p_query": query_embedding,
+            "p_k": match_count
         }).execute()
         return response.data
     except Exception as e:
-        logger.error(f"Error fetching relevant chunks: {str(e)}", exc_info=True)
+        logger.error(f"Error fetching relevant chunks: {e}", exc_info=True)
         raise
+
 
 def generate_rag_answer(query, conversation_id, relevant_chunks, model_name, max_chat_history=10):
     """
-    Generates the RAG answer by combining chat history, query, and relevant chunks.
+    Build prompt, invoke streaming LLM, publish tokens in real-time,
+    and return the full generated answer at completion.
     """
-    try:
-        chat_history = fetch_chat_history(conversation_id)
-        chat_history = chat_history[-max_chat_history:]
-        formatted_history = format_chat_history(chat_history) if chat_history else ""
-        chunk_context = " ".join([chunk["content"] for chunk in relevant_chunks])
-        full_context = f"{formatted_history}\nRelevant Context:\n{chunk_context}\n\nUser Query: {query}\nAssistant:"
-        full_context = trim_context_length(full_context, query, relevant_chunks, model_name, max_tokens=127999)
-        
-        llm = ChatOpenAI(model=model_name, temperature=0.7)
-        prompt_template = PromptTemplate(input_variables=["context"], template="{context}")
-        pipeline = prompt_template | llm
-        return pipeline.invoke({"context": full_context})
-    except Exception as e:
-        logger.error(f"Error generating RAG answer: {str(e)}", exc_info=True)
-        raise
+    # Build conversational context
+    chat_history = fetch_chat_history(conversation_id)[-max_chat_history:]
+    formatted_history = format_chat_history(chat_history) if chat_history else ""
+    chunk_context = "\n\n".join(c["content"] for c in relevant_chunks)
+    full_context = (
+        f"{formatted_history}\n\nRelevant Context:\n{chunk_context}\n\n"
+        f"User Query: {query}\nAssistant:"
+    )
+    full_context = trim_context_length(full_context, query, relevant_chunks, model_name, max_tokens=127999)
+
+    # Set up streaming callback for token-level pushes
+    handler = StreamToClientHandler(conversation_id)
+    cb_manager = CallbackManager([handler])
+    llm = get_chat_llm(model_name, callback_manager=cb_manager)
+
+    # Streaming prediction: on_llm_new_token fires for each token
+    answer = llm.predict(full_context)
+    return answer
+
+def create_new_conversation(user_id, document_ids):
+    """
+    Inserts a new row into chat_session and returns its UUID.
+    """
+    new_chat_session = {
+        "user_id": user_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "document_ids": document_ids
+    }
+    response = supabase_client.table("chat_session").insert(new_chat_session).execute()
+    return response.data[0]["id"]
 
 def save_conversation(conversation_id, user_id, query, answer):
     """
-    Save the user's query and the RAG response to the conversation history.
+    Persists user and assistant messages into Supabase messages table.
     """
-    try:
-        insert_conversation_supabase_record(
-            supabase_client, 
-            table_name="message", 
-            user_id=user_id, 
-            conversation_id=conversation_id, 
-            message_role="user",
-            message_content=query,
-            created_at=datetime.now(timezone.utc).isoformat()
-        )
+    insert_conversation_supabase_record(
+        supabase_client,
+        table_name="message",
+        user_id=user_id,
+        conversation_id=conversation_id,
+        message_role="user",
+        message_content=query,
+        created_at=datetime.now(timezone.utc).isoformat()
+    )
+    insert_conversation_supabase_record(
+        supabase_client,
+        table_name="message",
+        user_id=user_id,
+        conversation_id=conversation_id,
+        message_role="assistant",
+        message_content=answer,
+        created_at=datetime.now(timezone.utc).isoformat()
+    )
 
-        insert_conversation_supabase_record(
-            supabase_client, 
-            table_name="message", 
-            user_id=user_id, 
-            conversation_id=conversation_id, 
-            message_role="assistant",
-            message_content=answer,
-            created_at=datetime.now(timezone.utc).isoformat()
-        )
-
-        # supabase_client.table("message").insert({
-        #     "user_id": user_id,
-        #     "conversation_id": conversation_id,
-        #     "message_role": "user",
-        #     "message_content": query,
-        #     "created_at": datetime.now(timezone.utc).isoformat(),
-        # }).execute()
-
-        # supabase_client.table("message").insert({
-        #     "user_id": user_id,
-        #     "conversation_id": conversation_id,
-        #     "message_role": "assistant",
-        #     "message_content": answer,
-        #     "created_at": datetime.now(timezone.utc).isoformat(),
-        # }).execute()
-    except Exception as e:
-        logger.error(f"Error saving conversation: {str(e)}", exc_info=True)
-        raise
 
 def fetch_chat_history(conversation_id):
     """
-    Fetches the chat history for a given conversation_id.
-    Returns a list of messages sorted by created_at.
+    Returns ordered list of message dicts for a conversation.
     """
-    try: 
-        response = supabase_client.table("message").select("*").eq("conversation_id", conversation_id).order("created_at").execute()
-        print("Successful fetching chat history from Supabase !!")
-        return response.data
-    except Exception as e:
-        raise Exception(f"Error fetching chat history: {e}")
+    response = supabase_client.table("message").select("*").eq("conversation_id", conversation_id).order("created_at").execute()
+    return response.data
+
 
 def format_chat_history(chat_history):
     """
-    Formats the chat history into a conversational string for the LLM prompt.
+    Converts list of messages to a single string for prompt context.
     """
-    formatted_history = ""
-    for message in chat_history:
-        role = message["message_role"]
-        content = message["message_content"]
-        formatted_history += f"{role.capitalize()}: {content}\n"
-    return formatted_history
+    return "".join(f"{m['message_role'].capitalize()}: {m['message_content']}\n" for m in chat_history)
+
 
 def trim_context_length(full_context, query, relevant_chunks, model_name, max_tokens):
-    # Ensure formatted_history and chunk_context are initialized
-    formatted_history = ""
-    chunk_context = " ".join([chunk["content"] for chunk in relevant_chunks])
-
-    # Helper function to estimate token length
-    def count_tokens(text, model_name):
-        import tiktoken
-        tokenizer = tiktoken.encoding_for_model(model_name)
-        return len(tokenizer.encode(text))
-
-    # Dynamically trim context to fit within token limit
-    while count_tokens(full_context, model_name) > max_tokens:
-        if 'chat_history' in locals() and len(chat_history) > 1:
-            chat_history = chat_history[1:]  # Remove the oldest message
-            formatted_history = format_chat_history(chat_history)
-        elif len(relevant_chunks) > 1:
-            relevant_chunks.pop()  # Remove the least relevant chunk
-            chunk_context = " ".join([chunk["content"] for chunk in relevant_chunks])
-        else:
-            break  # Cannot reduce further
-
-    # Safeguard: Ensure formatted_history and chunk_context are properly defined
-    if not formatted_history:
-        formatted_history = "No prior chat history available."
-
-    if not chunk_context:
-        chunk_context = "No relevant context found."
-
-    return f"{formatted_history}\nRelevant Context:\n{chunk_context}\n\nUser Query: {query}\nAssistant:"
+    """
+    Iteratively remove chunks until prompt fits within model token limit.
+    """
+    import tiktoken
+    tokenizer = tiktoken.encoding_for_model(model_name)
+    history = full_context
+    # While over token budget, drop least relevant chunks
+    while len(tokenizer.encode(history)) > max_tokens and relevant_chunks:
+        relevant_chunks.pop()
+        chunk_context = "\n\n".join(c["content"] for c in relevant_chunks)
+        history = f"Relevant Context:\n{chunk_context}\n\nUser Query: {query}\nAssistant:"
+    return full_context
