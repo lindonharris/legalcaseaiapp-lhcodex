@@ -35,7 +35,6 @@ class BaseTaskWithRetry(Task):
     retry_kwargs = {"max_retries": 5}
     retry_jitter = True
 
-
 def publish_token(chat_session_id: str, token: str):
     """
     Stub function to publish a single token to clients subscribed to a chat session.
@@ -54,7 +53,6 @@ class StreamToClientHandler(BaseCallbackHandler):
     def on_llm_new_token(self, token: str, **kwargs) -> None:
         # Called by LangChain for every new token in streaming mode
         publish_token(self.session_id, token)
-
 
 def get_chat_llm(model_name: str, callback_manager: CallbackManager = None) -> ChatOpenAI:
     """
@@ -109,64 +107,6 @@ def rag_chat_task(self, user_id, chat_session_id, query, document_ids, project_i
         # Retry on failure according to BaseTaskWithRetry policies
         raise self.retry(exc=e)
 
-
-@celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
-def chunk_and_embed_task(self, pdf_url, source_id, chunk_size=1000, chunk_overlap=100):
-    """
-    Download a PDF, split into chunks, embed with OpenAI, and bulk-insert into Supabase.
-    Includes a dimension check to ensure embeddings match vector(1536).
-    """
-    temp_file = None
-    try:
-        # Download PDF to temp file
-        response = requests.get(pdf_url)
-        response.raise_for_status()
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-        temp_file.write(response.content)
-        temp_file.close()
-
-        # Chunk PDF content
-        loader = PyPDFLoader(temp_file.name)
-        documents = loader.load()
-        splitter = CharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-        chunks = splitter.split_documents(documents)
-
-        texts = [c.page_content for c in chunks]
-        metadatas = [{"source": pdf_url, "page_number": c.metadata.get("page")} for c in chunks]
-
-        # Batch embed documents
-        embedding_model = OpenAIEmbeddings(model="text-embedding-ada-002")
-        embeddings = embedding_model.embed_documents(texts)
-
-        # Dimension guard: must be exactly 1536 floats
-        for idx, vec in enumerate(embeddings):
-            if len(vec) != 1536:
-                raise ValueError(f"Embedding length mismatch: expected 1536, got {len(vec)} at index {idx}")
-
-        # Prepare rows and bulk insert
-        vector_rows = [
-            {"source_id": source_id, "content": t, "metadata": m, "embedding": v}
-            for t, m, v in zip(texts, metadatas, embeddings)
-        ]
-        resp = supabase_client.table("document_vector_store").insert(vector_rows).execute()
-        if resp.error:
-            logger.error(f"Supabase bulk vector insert failed: {resp.error}")
-            raise Exception(resp.error)
-
-        logger.info(f"Inserted {len(vector_rows)} embeddings for source_id={source_id}")
-
-    except Exception as e:
-        logger.error(f"Failed chunk/embed for {pdf_url}: {e}", exc_info=True)
-        raise
-
-    finally:
-        # Clean up temp file
-        if temp_file:
-            try:
-                os.unlink(temp_file.name)
-            except OSError:
-                pass
-
 def fetch_relevant_chunks(query_embedding, project_id, match_count=10):
     """
     Calls Supabase RPC to retrieve the nearest neighbor chunks using HNSW index.
@@ -181,7 +121,6 @@ def fetch_relevant_chunks(query_embedding, project_id, match_count=10):
     except Exception as e:
         logger.error(f"Error fetching relevant chunks: {e}", exc_info=True)
         raise
-
 
 def generate_rag_answer(query, conversation_id, relevant_chunks, model_name, max_chat_history=10):
     """
@@ -242,7 +181,6 @@ def save_conversation(conversation_id, user_id, query, answer):
         created_at=datetime.now(timezone.utc).isoformat()
     )
 
-
 def fetch_chat_history(conversation_id):
     """
     Returns ordered list of message dicts for a conversation.
@@ -250,13 +188,11 @@ def fetch_chat_history(conversation_id):
     response = supabase_client.table("message").select("*").eq("conversation_id", conversation_id).order("created_at").execute()
     return response.data
 
-
 def format_chat_history(chat_history):
     """
     Converts list of messages to a single string for prompt context.
     """
     return "".join(f"{m['message_role'].capitalize()}: {m['message_content']}\n" for m in chat_history)
-
 
 def trim_context_length(full_context, query, relevant_chunks, model_name, max_tokens):
     """
