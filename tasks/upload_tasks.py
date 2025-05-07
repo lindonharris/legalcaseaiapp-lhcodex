@@ -144,7 +144,6 @@ def process_pdf_task(self, files, metadata=None):
     logger.info(f"{self.name} completed successfully.")
     return source_ids
 
-
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
 def process_pdf_task_OLD(self, files, metadata=None):
     """

@@ -8,7 +8,7 @@ from utils.pdf_utils import extract_text_from_pdf
 from tasks.podcast_generate_tasks import validate_and_generate_audio_task, generate_dialogue_only_task
 from tasks.upload_tasks import process_pdf_task, insert_sources_media_association_task, insert_project_documents_task
 from tasks.test_tasks import addition_task
-from tasks.chat_tasks import rag_chat_task
+from tasks.chat_streaming_tasks import rag_chat_task
 from celery import chain, chord, group
 from celery.result import AsyncResult
 
@@ -67,8 +67,8 @@ class PDFRequest(BaseModel):
     metadata: Dict[str, Any]  # A dictionary for any metadata information
 
 # New RAG pipeline request model
-class NewRagRequest(BaseModel):
-    ''' WeWeb specific pydantic struct '''
+class NewRagPipelineRequest(BaseModel):
+    ''' WeWeb specific pydantic struct for creation of a new RAG project '''
     files: List[str]  # List of URLs or file paths of the PDFs
     metadata: Dict[str, Any]  # A dictionary for any metadata information
 
@@ -82,7 +82,7 @@ class PDFResponse(BaseModel):
     embedding_task_id: str
 
 # RAG Query pydantic model
-class RAGRequest(BaseModel):
+class RagQueryRequest(BaseModel):
     user_id: str
     conversation_id: str
     query: str
@@ -160,7 +160,7 @@ async def celery_test_addition(request: AdditionRequest):
 #               RAG API ENDPOINTS
 # ================================================ #
 @app.post("/new-rag-project/", response_model=NewRagResponse)
-async def creat_new_rag_project(request: NewRagRequest, background_tasks: BackgroundTasks):
+async def creat_new_rag_project(request: NewRagPipelineRequest, background_tasks: BackgroundTasks):
     '''
     Endpoint to create both a RAG pipeline for AI notes in one call:
         - process_pdf_task:
@@ -181,8 +181,8 @@ async def creat_new_rag_project(request: NewRagRequest, background_tasks: Backgr
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     
-@app.post("/new-rag-project/", response_model=NewRagResponse)
-async def create_new_rag_project_DEPR(request: NewRagRequest, background_tasks: BackgroundTasks):
+@app.post("/new-rag-project-deprecated/", response_model=NewRagResponse)
+async def create_new_rag_project_DEPR(request: NewRagPipelineRequest, background_tasks: BackgroundTasks):
     '''
     @INVESTIGATE: Should i use this to kill 2 birds with one stone? Using chords
     Endpoint to create both a RAG pipeline for AI notes in one call:
@@ -232,7 +232,7 @@ async def create_new_rag_project_DEPR(request: NewRagRequest, background_tasks: 
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/add-to-rag-project/", response_model=NewRagResponse)
-async def append_sources_to_project(request: NewRagRequest, background_tasks: BackgroundTasks):
+async def append_sources_to_project(request: NewRagPipelineRequest, background_tasks: BackgroundTasks):
     '''
     @TODO HAVE NOT STARTED !!!
     Endpoint to add new sources to an existing RAG pipeline for AI notes in one call:
@@ -279,7 +279,7 @@ async def append_sources_to_project(request: NewRagRequest, background_tasks: Ba
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/generate-rag-note/")
-async def rag_chat(request: RAGRequest):
+async def rag_chat(request: RagQueryRequest):
     try:
         # Trigger the RAG task asynchronously and add it to the queue
         task = rag_chat_task.apply_async(args=[
@@ -297,15 +297,15 @@ async def rag_chat(request: RAGRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/rag-chat/")
-async def rag_chat(request: RAGRequest):
+async def rag_chat(request: RagQueryRequest):
     try:
         # Trigger the RAG task asynchronously and add it to the queue
         task = rag_chat_task.apply_async(args=[
             request.user_id,
             request.conversation_id,
             request.query,
-            request.document_ids,
-            request.project_id
+            request.project_id,
+            request.model_type
         ])
         
         # Return the task ID to the client

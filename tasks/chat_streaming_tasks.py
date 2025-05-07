@@ -1,5 +1,5 @@
 '''
-This file runs Celery tasks for handling RAG chat tasks (non-streaming LLM responses)
+This file runs Celery tasks for handling RAG chat tasks with token streaming enabled
 '''
 
 from celery import Celery, Task
@@ -67,7 +67,7 @@ def get_chat_llm(model_name: str, callback_manager: CallbackManager = None) -> C
     )
 
 @celery_app.task(bind=True, base=BaseTaskWithRetry)
-def rag_chat_task(self, user_id, chat_session_id, query, project_id, model_type):
+def rag_chat_task(self, user_id, chat_session_id, query, document_ids, project_id, model_type):
     """
     Main RAG workflow:
     1. Ensure a chat session exists
@@ -79,7 +79,7 @@ def rag_chat_task(self, user_id, chat_session_id, query, project_id, model_type)
     try:
         # 1) Initialize or create conversation if needed
         if not chat_session_id:
-            chat_session_id = create_new_conversation(user_id, project_id)
+            chat_session_id = create_new_conversation(user_id, document_ids)
 
         # 2) Embed the query using OpenAI Ada embeddings (1536 dims)
         embedding_model = OpenAIEmbeddings(model="text-embedding-ada-002")
@@ -146,14 +146,14 @@ def generate_rag_answer(query, conversation_id, relevant_chunks, model_name, max
     answer = llm.predict(full_context)
     return answer
 
-def create_new_conversation(user_id, project_id):
+def create_new_conversation(user_id, document_ids):
     """
     Inserts a new row into chat_session and returns its UUID.
     """
     new_chat_session = {
         "user_id": user_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "project_id": project_id
+        "document_ids": document_ids
     }
     response = supabase_client.table("chat_session").insert(new_chat_session).execute()
     return response.data[0]["id"]
