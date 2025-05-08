@@ -217,7 +217,7 @@ def format_chat_history(chat_history):
     """
     return "".join(f"{m['message_role'].capitalize()}: {m['message_content']}\n" for m in chat_history)
 
-def trim_context_length(full_context, query, relevant_chunks, model_name, max_tokens):
+def trim_context_length(full_context, query, relevant_chunks, model_name, max_tokens): 
     """
     Iteratively remove chunks until prompt fits within model token limit.
     """
