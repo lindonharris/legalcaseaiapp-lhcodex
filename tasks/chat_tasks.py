@@ -7,6 +7,7 @@ from celery import Celery, Task
 from tasks.celery_app import celery_app  # Import the Celery app instance (see celery_app.py for LocalHost config)
 import logging
 import os
+import redis
 from supabase import create_client, Client
 from utils.supabase_utils import insert_conversation_supabase_record, supabase_client
 from datetime import datetime, timezone
@@ -26,6 +27,10 @@ from langchain.document_loaders import PyPDFLoader
 from langchain.text_splitter import CharacterTextSplitter
 
 logger = logging.getLogger(__name__)
+
+# Initialize Redis sync client for pub/sub
+REDIS_LABS_URL = os.getenv("REDIS_LABS_URL_AND_PASS")
+redis_sync = redis.Redis.from_url(REDIS_LABS_URL, decode_responses=True)
 
 class BaseTaskWithRetry(Task):
     """
@@ -55,10 +60,12 @@ class StreamToClientHandler(BaseCallbackHandler):
         # Called by LangChain for every new token in streaming mode
         publish_token(self.session_id, token)
 
-def get_chat_llm(model_name: str, callback_manager: CallbackManager = None) -> ChatOpenAI:
+def get_chat_llm(model_name: str = "gpt-4o-mini", callback_manager: CallbackManager = None) -> ChatOpenAI:
     """
     Factory to create a ChatOpenAI instance.
     If callback_manager is provided, enable streaming and attach handlers.
+
+    (default) OpenAI gpt-4o-mini model
     """
     return ChatOpenAI(
         model=model_name,
@@ -78,18 +85,21 @@ def rag_chat_task(self, user_id, chat_session_id, query, project_id, model_type)
     5. Persist query and answer in Supabase
     """
     try:
-        # 1) Initialize or create conversation if needed
+        # Set explicit start time metadata
+        self.update_state(state="PENDING", meta={"start_time": datetime.now(timezone.utc).isoformat()})
+
+        # Step 1) Initialize or create conversation if needed
         if not chat_session_id:
             chat_session_id = create_new_conversation(user_id, project_id)
 
-        # 2) Embed the query using OpenAI Ada embeddings (1536 dims)
+        # Step 2) Embed the query using OpenAI Ada embeddings (1536 dims)
         embedding_model = OpenAIEmbeddings(model="text-embedding-ada-002")
         query_embedding = embedding_model.embed_query(query)
 
-        # 3) Fetch top-K relevant chunks via Supabase RPC
+        # Step 3) Fetch top-K relevant chunks via Supabase RPC
         relevant_chunks = fetch_relevant_chunks(query_embedding, project_id)
 
-        # 4) Stream generation to client, accumulate full answer
+        # Step 4) Generation answer for client (@TODO may be used to token streaming at a later point )
         full_answer = generate_rag_answer(
             query,
             chat_session_id,
@@ -97,10 +107,22 @@ def rag_chat_task(self, user_id, chat_session_id, query, project_id, model_type)
             model_name=model_type  # supports gpt-4o, gemini-flash, deepseek-v3, etc.
         )
 
-        # 5) Save entire conversation turn in DB
-        save_conversation(chat_session_id, user_id, query, answer=full_answer)
+        # Step 4) Publish final answer to Redis pub/sub, topic name "chat_result"
+        redis_sync.publish(f"chat_result:{chat_session_id}", json.dumps({
+            "status": "SUCCESS",
+            "message_role": "assistant",
+            "message": full_answer
+        }))
 
-        # Return completed answer for HTTP response
+        # Step 5) Save entire conversation turn in DB
+        save_conversation(
+            chat_session_id, 
+            user_id, 
+            query, 
+            answer=full_answer      # full rag reponse
+        )
+
+        # Return completed answer for HTTP response (unpacked in WeWeb)
         return {"answer": full_answer, "message_role": "assistant"}
 
     except Exception as e:
@@ -139,7 +161,7 @@ def generate_rag_answer(query, chat_session_id, relevant_chunks, model_name, max
     full_context = trim_context_length(full_context, query, relevant_chunks, model_name, max_tokens=127999)
 
     # Set up streaming callback for token-level pushes
-    # handler = StreamToClientHandler(conversation_id)                     # Disabled, no token streaming
+    # handler = StreamToClientHandler(chat_session_id)                     # Disabled, no token streaming
     # cb_manager = CallbackManager([handler])                              # Disabled, no token streaming
     llm = get_chat_llm(model_name)
 
@@ -161,7 +183,7 @@ def create_new_conversation(user_id, project_id):
 
 def save_conversation(chat_session_id, user_id, query, answer):
     """
-    Persists user and assistant messages into Supabase messages table.
+    Persists user and assistant messages into Supabase public.messages table.
     """
     insert_conversation_supabase_record(
         supabase_client,
@@ -182,11 +204,11 @@ def save_conversation(chat_session_id, user_id, query, answer):
         created_at=datetime.now(timezone.utc).isoformat()
     )
 
-def fetch_chat_history(conversation_id):
+def fetch_chat_history(chat_session_id):
     """
     Returns ordered list of message dicts for a conversation.
     """
-    response = supabase_client.table("message").select("*").eq("conversation_id", conversation_id).order("created_at").execute()
+    response = supabase_client.table("message").select("*").eq("chat_session_id", chat_session_id).order("created_at").execute()
     return response.data
 
 def format_chat_history(chat_history):

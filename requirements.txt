@@ -19,6 +19,7 @@ uvicorn
 celery
 gevent==23.9.1
 redis 
+websockets 
 
 # AWS dependencies
 boto3

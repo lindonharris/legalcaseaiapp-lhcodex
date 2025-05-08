@@ -122,13 +122,13 @@ def fetch_relevant_chunks(query_embedding, project_id, match_count=10):
         logger.error(f"Error fetching relevant chunks: {e}", exc_info=True)
         raise
 
-def generate_rag_answer(query, conversation_id, relevant_chunks, model_name, max_chat_history=10):
+def generate_rag_answer(query, chat_session_id, relevant_chunks, model_name, max_chat_history=10):
     """
     Build prompt, invoke streaming LLM, publish tokens in real-time,
     and return the full generated answer at completion.
     """
     # Build conversational context
-    chat_history = fetch_chat_history(conversation_id)[-max_chat_history:]
+    chat_history = fetch_chat_history(chat_session_id)[-max_chat_history:]
     formatted_history = format_chat_history(chat_history) if chat_history else ""
     chunk_context = "\n\n".join(c["content"] for c in relevant_chunks)
     full_context = (
@@ -138,7 +138,7 @@ def generate_rag_answer(query, conversation_id, relevant_chunks, model_name, max
     full_context = trim_context_length(full_context, query, relevant_chunks, model_name, max_tokens=127999)
 
     # Set up streaming callback for token-level pushes
-    handler = StreamToClientHandler(conversation_id)
+    handler = StreamToClientHandler(chat_session_id)
     cb_manager = CallbackManager([handler])
     llm = get_chat_llm(model_name, callback_manager=cb_manager)
 
@@ -158,7 +158,7 @@ def create_new_conversation(user_id, document_ids):
     response = supabase_client.table("chat_session").insert(new_chat_session).execute()
     return response.data[0]["id"]
 
-def save_conversation(conversation_id, user_id, query, answer):
+def save_conversation(chat_session_id, user_id, query, answer):
     """
     Persists user and assistant messages into Supabase messages table.
     """
@@ -166,7 +166,7 @@ def save_conversation(conversation_id, user_id, query, answer):
         supabase_client,
         table_name="message",
         user_id=user_id,
-        conversation_id=conversation_id,
+        chat_session_id=chat_session_id,
         message_role="user",
         message_content=query,
         created_at=datetime.now(timezone.utc).isoformat()
@@ -175,17 +175,17 @@ def save_conversation(conversation_id, user_id, query, answer):
         supabase_client,
         table_name="message",
         user_id=user_id,
-        conversation_id=conversation_id,
+        chat_session_id=chat_session_id,
         message_role="assistant",
         message_content=answer,
         created_at=datetime.now(timezone.utc).isoformat()
     )
 
-def fetch_chat_history(conversation_id):
+def fetch_chat_history(chat_session_id):
     """
     Returns ordered list of message dicts for a conversation.
     """
-    response = supabase_client.table("message").select("*").eq("conversation_id", conversation_id).order("created_at").execute()
+    response = supabase_client.table("message").select("*").eq("chat_session_id", chat_session_id).order("created_at").execute()
     return response.data
 
 def format_chat_history(chat_history):

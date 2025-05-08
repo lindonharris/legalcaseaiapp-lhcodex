@@ -1,5 +1,5 @@
-from fastapi import FastAPI, BackgroundTasks, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
+import os
+from dotenv import load_dotenv
 from pydantic import BaseModel
 from datetime import datetime, timezone
 from typing import List, Dict, Any
@@ -12,13 +12,20 @@ from tasks.chat_streaming_tasks import rag_chat_streaming_task
 from tasks.chat_tasks import rag_chat_task
 from celery import chain, chord, group
 from celery.result import AsyncResult
+import redis.asyncio as aioredis
 
+# FastAPI
+from fastapi import FastAPI, BackgroundTasks, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 
+# Load environment variables
+load_dotenv()
 
-# Init fast api app
+# Init FastAPI app & Redis pub.sub
 app = FastAPI()
+redis_url = os.getenv("REDIS_LABS_URL_AND_PASS")
+redis_pub = aioredis.from_url(redis_url, decode_responses=True)
 # celery_app = Celery('tasks', broker='redis://localhost:6379/0')
-
 
 origins = [
     "https://app.weweb.io",  # Replace with the actual WeWeb domain if different
@@ -85,11 +92,30 @@ class PDFResponse(BaseModel):
 # RAG Query pydantic model
 class RagQueryRequest(BaseModel):
     user_id: str
-    conversation_id: str
+    chat_session_id: str
     query: str
     # document_ids: List[str]
     project_id: str
     model_type: str
+
+
+# ================================================ #
+#                  WEBSOCKETS
+# ================================================ #
+
+@app.websocket("/ws/chat/{session_id}")
+async def websocket_chat(session_id: str, websocket: WebSocket):
+    await websocket.accept()
+    pubsub = redis_pub.pubsub()
+    await pubsub.subscribe(f"chat_result:{session_id}")
+
+    try:
+        async for message in pubsub.listen():
+            if message['type'] == 'message':
+                await websocket.send_text(message['data'])
+    except WebSocketDisconnect:
+        await pubsub.unsubscribe(f"chat_result:{session_id}")
+
 
 # ================================================ #
 #               TEST ENDPOINTS
@@ -202,6 +228,7 @@ async def create_new_rag_project_DEPR(request: NewRagPipelineRequest, background
         }
     '''
     try:
+
         # Create signatures for the tasks
         process_pdf_task_signature = process_pdf_task.s(request.files, request.metadata)        # Upload PDFs to AWS S3, and Supabase
         # validate_and_generate_audio_task_signature = validate_and_generate_audio_task.s(request.files, request.metadata)
@@ -285,9 +312,8 @@ async def generate_rag_note(request: RagQueryRequest):
         # Trigger the RAG task asynchronously and add it to the queue
         task = rag_chat_task.apply_async(args=[
             request.user_id,
-            request.conversation_id,
+            request.chat_session_id,
             request.query,
-            request.document_ids,
             request.project_id,
             request.model_type
         ])
@@ -304,9 +330,8 @@ async def rag_chat(request: RagQueryRequest):
         # Trigger the RAG task asynchronously and add it to the queue
         task = rag_chat_task.apply_async(args=[
             request.user_id,
-            request.conversation_id,
+            request.chat_session_id,
             request.query,
-            request.document_ids,
             request.project_id,
             request.model_type
         ])
@@ -323,7 +348,7 @@ async def rag_chat_stream(request: RagQueryRequest):
         # Trigger the RAG task asynchronously and add it to the queue
         task = rag_chat_streaming_task.apply_async(args=[
             request.user_id,
-            request.conversation_id,
+            request.chat_session_id,
             request.query,
             request.project_id,
             request.model_type
@@ -336,14 +361,43 @@ async def rag_chat_stream(request: RagQueryRequest):
 
 @app.get("/rag-chat-status/{task_id}")
 async def get_rag_chat_status(task_id: str):
-    """Endpoint to check the status and result of the rag_chat_task.run() task."""
+    """
+    Check task status and result of the rag_chat_task.run() task.
+    Includes timeout if stuck in PENDING > 20s    
+    """
+    # A proxy object that allows you to fetch the status and result of any Celery task
     result = AsyncResult(task_id)
-    if result.state == "SUCCESS":
-        return {"status": result.state, "result": result.result}
-    elif result.state == "FAILURE":
-        return {"status": result.state, "error": str(result.result)}
+
+    # Retrieve task metadata
+    task_meta = result.info if isinstance(result.info, dict) else {}
+    now = datetime.now(timezone.utc)
+
+    # Use explicitly set start_time if available
+    start_time_str = task_meta.get("start_time")
+    if start_time_str:
+        try:
+            start_time = datetime.fromisoformat(start_time_str)
+            elapsed = (now - start_time).total_seconds()
+        except Exception:
+            elapsed = None
     else:
-        return {"status": result.state}
+        elapsed = None  # fallback if broker doesn't store this
+
+    if result.state == "PENDING":
+        if elapsed and elapsed > 20:
+            return {
+                "task_id": task_id,
+                "status": "TIMEOUT",
+                "elapsed_time": elapsed,
+                "message": "RAG task has exceeded 20 seconds. You may retry."
+            }
+        return {"task_id": task_id, "status": "PENDING", "elapsed_time": elapsed}
+    elif result.state == "SUCCESS":
+        return {"task_id": task_id, "status": "SUCCESS", "result": result.result}
+    elif result.state == "FAILURE":
+        return {"task_id": task_id, "status": "FAILURE", "error": str(result.result)}
+    else:
+        return {"task_id": task_id, "status": result.state}
 
 # ================================================ #
 #              PODCAST API ENDPOINTS
@@ -405,7 +459,20 @@ async def pdf_to_dialogue_transcript(request: PDFRequest, background_tasks: Back
 # Combined endpoint to check the status of any Celery task
 @app.get("/task-status/{task_id}")
 async def get_task_status(task_id: str):
+    """
+    Purpose:
+        A generic Celery task monitor. It can check the status of any Celery task, including:
+        - rag_chat_task
+        - pdf_to_dialogue_task
+        - addition_task
+        ...or any other task your system may launch
+        No custom behavior or message formatting per task type.
+
+    Limitations:
+        No custom behavior or message formatting per task type.
+   """
     try:
+        # A proxy object that allows you to fetch the status and result of any Celery task
         task_result = AsyncResult(task_id)
 
         # Retrieve task metadata
@@ -450,3 +517,30 @@ async def get_task_status(task_id: str):
     except Exception as e:
         # Handle any unexpected exceptions
         raise HTTPException(status_code=500, detail=f"Error retrieving task status: {str(e)}")
+
+# ================================================ #
+#              DEV-TOOLS ENDPOINTS
+# ================================================ #
+
+@app.get("/debug-task/{task_id}")
+async def debug_task(task_id: str):
+    """
+    Dev-only endpoint to inspect any Celery task’s state, metadata, and result.
+    WARNING: Don’t expose this in production without access control.
+    """
+    try:
+        result = AsyncResult(task_id)
+        task_meta = result.info if isinstance(result.info, dict) else {}
+
+        return {
+            "task_id": task_id,
+            "state": result.state,
+            "is_ready": result.ready(),
+            "successful": result.successful() if result.ready() else None,
+            "result": str(result.result),  # may be a full dict or traceback
+            "metadata": task_meta,
+            "traceback": result.traceback
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error retrieving task: {str(e)}")
