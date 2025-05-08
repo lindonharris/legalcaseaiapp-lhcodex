@@ -13,8 +13,8 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-message_queue_env = os.getenv("AMQP_LAVINMQ_URL_AND_PASS")
-redis_labs_env = 'redis://default:' + os.getenv("REDIS_FLEX_PASS") + '@' + os.getenv("REDIS_FLEX_INSTANCE")
+CLOUD_AMQP_ENDPOINT = os.getenv("CLOUDAMQP_PUBLIC_ENDPOINT")
+REDIS_LABS_ENDPOINT = 'redis://default:' + os.getenv("REDIS_PASSWORD") + '@' + os.getenv("REDIS_PUBLIC_ENDPOINT")
 
 # <--- localhost version --->
 
@@ -33,11 +33,11 @@ redis_labs_env = 'redis://default:' + os.getenv("REDIS_FLEX_PASS") + '@' + os.ge
 # Initialize the Celery app 
 celery_app = Celery(
     'celery_app',
-    broker=message_queue_env,       # AMQP instance url and password endpoint
-    backend=redis_labs_env,         # RedisLabs instance url and password endpoint
+    broker=CLOUD_AMQP_ENDPOINT,             # AMQP instance url and password endpoint
+    backend=REDIS_LABS_ENDPOINT,            # RedisLabs instance url and password endpoint
     task_serializer='json',
     result_serializer='json',
-    accept_content=['json'],        # Accept only JSON content
+    accept_content=['json'],                # Accept only JSON content
 )
 
 # Optional: Load configuration from a separate config file or object
@@ -51,8 +51,12 @@ celery_app.conf.update(
 )
 
 # Import tasks to register them with Celery (THIS WORKS!!!)
-import tasks.generate_tasks
+# import tasks.generate_tasks
 import tasks.chat_tasks
+import tasks.chat_streaming_tasks
+import tasks.upload_tasks
+import tasks.test_tasks
+
 
 # # Optional: ASK GPT ABOUT IT'S PURPOSE: Automatically discover tasks in specified modules
 # # This allows Celery to find tasks in modules like `generate_tasks.py` and `other_tasks.py`

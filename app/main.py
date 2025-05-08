@@ -23,8 +23,8 @@ load_dotenv()
 
 # Init FastAPI app & Redis pub.sub
 app = FastAPI()
-redis_url = os.getenv("REDIS_LABS_URL_AND_PASS")
-redis_pub = aioredis.from_url(redis_url, decode_responses=True)
+REDIS_LABS_URL = os.getenv("REDIS_LABS_URL_AND_PASS")  # REDIS_LABS_URL
+redis_pub = aioredis.from_url(REDIS_LABS_URL, decode_responses=True)
 # celery_app = Celery('tasks', broker='redis://localhost:6379/0')
 
 origins = [
