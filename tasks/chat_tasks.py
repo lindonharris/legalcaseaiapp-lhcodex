@@ -29,7 +29,7 @@ from langchain.text_splitter import CharacterTextSplitter
 logger = logging.getLogger(__name__)
 
 # Initialize Redis sync client for pub/sub
-REDIS_LABS_URL = os.getenv("REDIS_LABS_URL_AND_PASS")
+REDIS_LABS_URL = 'redis://default:' + os.getenv("REDIS_PASSWORD") + '@' + os.getenv("REDIS_PUBLIC_ENDPOINT")
 redis_sync = redis.Redis.from_url(REDIS_LABS_URL, decode_responses=True)
 
 class BaseTaskWithRetry(Task):

@@ -16,8 +16,8 @@ s3_client = boto3.client(
     's3',
     region_name='us-east-2',  # Specify your bucket's region
     config=Config(signature_version='s3v4'),                # S3 client to use Signature Version 4, you align with AWS's required authentication mechanism
-    aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
-    aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY')
+    aws_access_key_id=os.getenv('AWS_IAM_ACCESS_KEY'),
+    aws_secret_access_key=os.getenv('AWS_IAM_SECRET')
 )
 
 # Declare S3 bucket name

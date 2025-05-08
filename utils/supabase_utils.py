@@ -10,7 +10,7 @@ load_dotenv()
 
 # Initialize Supabase client
 supabase_client: Client = create_client(
-    os.getenv('SUPABASE_URL'), 
+    os.getenv('SUPABASE_PROJECT_URL'), 
     os.getenv('SUPABASE_SERVICE_ROLE_KEY')  # Ensure this key is the service role
 )
 
