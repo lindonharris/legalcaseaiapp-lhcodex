@@ -2,13 +2,16 @@
 import os
 import logging
 from dotenv import load_dotenv
+import socket
 import requests
 from supabase import create_client
 import redis
 from celery import Celery
 from kombu import Connection
 import boto3
+from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
+import openai 
 
 def setup_logging():
     logging.basicConfig(format='[%(levelname)s] %(message)s', level=logging.INFO)
@@ -47,32 +50,38 @@ def test_gemini(api_key):
     except Exception as e:
         logging.warning(f"Gemini API key failed: {e}")
 
-def test_deepseek(api_key):
-    if not test_env_var("DEEPSEEK_API", api_key):
+def test_deepseek(api_key, base_url):
+    if not (test_env_var("DEEPSEEK_API_KEY", api_key) and test_env_var("DEEPSEEK_BASE_URL", base_url)):
         return
-    # Replace with your real DeepSeek status endpoint if you have one
-    url = os.getenv("DEEPSEEK_API_URL", "https://api.deepseek.ai/v1/status")
-    headers = {"Authorization": f"Bearer {api_key}"}
     try:
-        r = requests.get(url, headers=headers, timeout=5)
-        if r.ok:
+        # Initialize as an OpenAI-style client
+        client = openai.OpenAI(
+            api_key=api_key,
+            base_url=base_url  # e.g. https://your-deepseek-base/v1
+        )
+        # perform a minimal call
+        resp = client.models.list()
+        if hasattr(resp, 'data'):
             logging.info("DeepSeek API key live")
         else:
-            logging.warning(f"DeepSeek API key failed: HTTP {r.status_code}")
+            logging.warning("DeepSeek API key failed: unexpected response")
     except Exception as e:
         logging.warning(f"DeepSeek API key failed: {e}")
 
 def test_supabase(url, key):
-    if not (test_env_var("SUPABASE_URL", url) and test_env_var("SUPABASE_SERVICE_ROLE_KEY", key)):
+    if not (test_env_var("SUPABASE_PROJECT_URL", url) and test_env_var("SUPABASE_SERVICE_ROLE_KEY", key)):
         return
     try:
         client = create_client(url, key)
-        # try a minimal query
-        resp = client.from_("projects").select("id", count="exact", limit=1).execute()
-        if resp.error:
-            logging.warning(f"Supabase query failed: {resp.error.message}")
+        resp = client.from_("projects").select("id", count="exact").limit(1).execute()
+        code = getattr(resp, "status_code", None)
+        data = getattr(resp, "data", None)
+
+        # treat any 2xx *or* any returned data as success
+        if (code and 200 <= code < 300) or (isinstance(data, list) and len(data) > 0):
+            logging.info(f"Supabase connection live (HTTP {code}, {len(data or [])} rows)")
         else:
-            logging.info("Supabase connection live")
+            logging.warning(f"Supabase query failed: HTTP {code} — {data}")
     except Exception as e:
         logging.warning(f"Supabase connection failed: {e}")
 
@@ -127,6 +136,8 @@ def test_s3(access_key, secret_key, bucket):
     try:
         s3 = boto3.client(
             's3',
+            region_name='us-east-2',
+            config=Config(signature_version='s3v4'),
             aws_access_key_id=access_key,
             aws_secret_access_key=secret_key
         )
@@ -136,17 +147,31 @@ def test_s3(access_key, secret_key, bucket):
         logging.warning(f"AWS S3 bucket access failed: {e}")
 
 def test_cloudfront(domain):
+    """
+    DNS-resolves the CloudFront domain and then HEADs "/" 
+    to verify the distribution edge is up (status <500).
+    """
     if not test_env_var("AWS_CLOUDFRONT_DOMAIN_PROD", domain):
         return
-    url = f"https://{domain}"
+
+    # 1) DNS resolution
     try:
-        r = requests.head(url, timeout=5)
-        if r.status_code < 400:
-            logging.info(f"AWS CloudFront domain reachable: HTTP {r.status_code}")
-        else:
-            logging.warning(f"AWS CloudFront domain returned HTTP {r.status_code}")
+        ip = socket.gethostbyname(domain)
+        logging.info(f"CloudFront domain resolves to {ip}")
     except Exception as e:
-        logging.warning(f"AWS CloudFront domain unreachable: {e}")
+        logging.warning(f"CloudFront DNS resolution failed: {e}")
+        return
+
+    # 2) HTTP HEAD to "/"
+    url = f"https://{domain}/"
+    try:
+        resp = requests.head(url, timeout=5, allow_redirects=True)
+        if resp.status_code < 500:
+            logging.info(f"CloudFront HTTP reachable: HTTP {resp.status_code}")
+        else:
+            logging.warning(f"CloudFront HTTP returned error: HTTP {resp.status_code}")
+    except Exception as e:
+        logging.warning(f"CloudFront HTTP check failed: {e}")
 
 def main():
     setup_logging()
@@ -156,7 +181,8 @@ def main():
     openai_prod = os.getenv("OPENAI_API_PROD_KEY")
     openai_test = os.getenv("OPENAI_API_TEST_KEY")
     gemini_key = os.getenv("GEMINI_API_KEY")
-    deepseek_key = os.getenv("DEEPSEEK_API")
+    deepseek_key = os.getenv("DEEPSEEK_API_KEY")
+    deepseek_base_url = os.getenv("DEEPSEEK_BASE_URL")
     supabase_url = os.getenv("SUPABASE_PROJECT_URL")
     supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
     redis_url = os.getenv("REDIS_LABS_URL_AND_PASS")
@@ -170,7 +196,7 @@ def main():
     test_openai(openai_prod, "OpenAI Prod")
     test_openai(openai_test, "OpenAI Test")
     test_gemini(gemini_key)
-    test_deepseek(deepseek_key)
+    test_deepseek(deepseek_key, deepseek_base_url)
     test_supabase(supabase_url, supabase_key)
     test_redis(redis_url)
     test_amqp(amqp_url)

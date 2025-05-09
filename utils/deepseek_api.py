@@ -11,14 +11,13 @@ load_dotenv()
 os.environ.pop("SSL_CERT_FILE", None)
 
 # Configuration: Fetch the DeepSeek API key and set the Base URL.
-DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API')
+DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
+DEEPSEEK_BASE_URL = os.getenv('DEEPSEEK_BASE_URL')
 
 if not DEEPSEEK_API_KEY:
     print("API key not found. Please check your .env file.")
 else:
     print("API key loaded successfully.")
-
-DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 
 # Initialize the OpenAI client to work with DeepSeek.
 client = OpenAI(

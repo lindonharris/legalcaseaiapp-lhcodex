@@ -23,6 +23,7 @@ import uuid
 # langchain dependencies
 from langchain.text_splitter import CharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
+# from langchain.document_loaders import PyPDFLoader
 from langchain_community.document_loaders import PyPDFLoader
 
 logger = logging.getLogger(__name__)
