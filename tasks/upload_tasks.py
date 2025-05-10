@@ -111,8 +111,10 @@ def process_pdf_task(self, files, metadata=None):
             resp = supabase_client.table("document_sources") \
                                 .insert(rows_to_insert) \
                                 .execute()
-            if resp.error:
-                raise RuntimeError(resp.error)
+            if resp.status_code not in (200, 201):
+                raise RuntimeError(f"Supabase insert failed: {resp.data}")
+
+            source_ids = [r["id"] for r in resp.data]
 
             # Loop thorugh reoponse to get, source_id list for the chaining/vector_embed tasks
             source_ids = [r["id"] for r in resp.data]
