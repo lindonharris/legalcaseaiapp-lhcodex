@@ -14,7 +14,8 @@ from tasks.upload_tasks import process_pdf_task, insert_sources_media_associatio
 from tasks.test_tasks import addition_task
 from tasks.chat_streaming_tasks import rag_chat_streaming_task
 from tasks.chat_tasks import rag_chat_task
-from celery import chain, chord, group
+from tasks.note_tasks import rag_note_task 
+from celery import chain, chord, group 
 from celery.result import AsyncResult
 import redis.asyncio as aioredis
 
@@ -87,6 +88,10 @@ class NewRagPipelineRequest(BaseModel):
 # New RAG pipeline response model
 class NewRagPipelineResponse(BaseModel):
     embedding_task_id: str      # from vector embedding task
+
+# Chained RAG pipeline response model
+class NewRagAndNoteResponse(BaseModel):
+    workflow_id: str             # the chain’s overall task ID
 
 # Pydantic model for the response
 class PDFResponse(BaseModel):
@@ -191,12 +196,12 @@ async def celery_test_addition(request: AdditionRequest):
 #               RAG API ENDPOINTS
 # ================================================ #
 @app.post("/new-rag-project/", response_model=NewRagPipelineResponse)
-async def creat_new_rag_project(request: NewRagPipelineRequest, background_tasks: BackgroundTasks):
+async def create_new_rag_project(request: NewRagPipelineRequest, background_tasks: BackgroundTasks):
     '''
-    Endpoint to create both a RAG pipeline for AI notes in one call:
+    Endpoint to ONLY create a RAG pipeline for user project:
         - process_pdf_task:
             input: request.files, request.metadata
-            returns: source_ids
+            returns: result??
         
     Request contains:
         request.files (List): list of pdf file links
@@ -208,60 +213,96 @@ async def creat_new_rag_project(request: NewRagPipelineRequest, background_tasks
         job = process_pdf_task.apply_async(
             args=[request.files, request.metadata]
         )
-        return {"task_id": job.id}
+        return {"embedding_task_id": job.id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     
-@app.post("/new-rag-project-deprecated/", response_model=NewRagPipelineResponse)
-async def create_new_rag_project_DEPR(request: NewRagPipelineRequest, background_tasks: BackgroundTasks):
+@app.post("/new-rag-and-notes/", response_model=NewRagAndNoteResponse)
+async def create_new_rag_project_and_gen_notes(request: NewRagPipelineRequest, background_tasks: BackgroundTasks):
     '''
-    @INVESTIGATE: Should i use this to kill 2 birds with one stone? Using chords
-    Endpoint to create both a RAG pipeline for AI notes in one call:
-        - process_pdf_task:
+    Endpoint to create BOTH a RAG pipeline and a "quick action" AI note, chaining 2 celery notes together
+        - process_pdf_task():
             input: request.files, request.metadata
-            returns: source_ids
-        - process_pdf_task:
-            input: source_ids
+            returns: None
+
+        - rag_note_task():
+            input: request.metadata
             returns: None
         
-    Request contains
-    project_id
+    Request contains:
         request.files (List): list of pdf file links
         request.metadata (json): {
             project_id:
         }
     '''
     try:
-
-        # Create signatures for the tasks
-        process_pdf_task_signature = process_pdf_task.s(request.files, request.metadata)        # Upload PDFs to AWS S3, and Supabase
-        # validate_and_generate_audio_task_signature = validate_and_generate_audio_task.s(request.files, request.metadata)
-
-        # Create the group
-        task_group = group(
-            process_pdf_task_signature,
-            # validate_and_generate_audio_task_signature
+        # 1) Kick off a chain: upload → note
+        workflow = chain(
+            process_pdf_task.s(request.files, request.metadata),
+            rag_note_task.s(
+                request.metadata["user_id"],
+                request.metadata["chat_session_id"],
+                request.metadata["summary_query"],  # e.g. your custom "Based on the docs…" prompt
+                request.metadata["project_id"],
+                request.metadata["model_type"]
+            )
         )
+        result: AsyncResult = workflow.apply_async()
+        return {"workflow_id": result.id}
 
-        # Create the chord with the group and callback
-        task_chord = chord(task_group)(insert_project_documents_task.s())
-
-        # The result of the chord is the AsyncResult of the callback task
-        chord_result = task_chord
-
-        # Get task IDs
-        process_pdf_task_id = chord_result.parent.results[0].id
-        # validate_and_generate_audio_task_id = chord_result.parent.results[1].id
-        insert_task_id = chord_result.id
-
-        # Return the task IDs to the client
-        return {
-            # "audio_task_id": validate_and_generate_audio_task_id,
-            "embedding_task_id": process_pdf_task_id,
-            "insert_task_id": insert_task_id,
-        }
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+    
+# @app.post("/new-rag-project-deprecated/", response_model=NewRagPipelineResponse)
+# async def create_new_rag_project_DEPR(request: NewRagPipelineRequest, background_tasks: BackgroundTasks):
+#     '''
+#     @INVESTIGATE: Should i use this to kill 2 birds with one stone? Using chords
+#     Endpoint to create both a RAG pipeline for AI notes in one call:
+#         - process_pdf_task:
+#             input: request.files, request.metadata
+#             returns: source_ids
+#         - process_pdf_task:
+#             input: source_ids
+#             returns: None
+        
+#     Request contains
+#     project_id
+#         request.files (List): list of pdf file links
+#         request.metadata (json): {
+#             project_id:
+#         }
+#     '''
+#     try:
+
+#         # Create signatures for the tasks
+#         process_pdf_task_signature = process_pdf_task.s(request.files, request.metadata)        # Upload PDFs to AWS S3, and Supabase
+#         # validate_and_generate_audio_task_signature = validate_and_generate_audio_task.s(request.files, request.metadata)
+
+#         # Create the group
+#         task_group = group(
+#             process_pdf_task_signature,
+#             # validate_and_generate_audio_task_signature
+#         )
+
+#         # Create the chord with the group and callback
+#         task_chord = chord(task_group)(insert_project_documents_task.s())
+
+#         # The result of the chord is the AsyncResult of the callback task
+#         chord_result = task_chord
+
+#         # Get task IDs
+#         process_pdf_task_id = chord_result.parent.results[0].id
+#         # validate_and_generate_audio_task_id = chord_result.parent.results[1].id
+#         insert_task_id = chord_result.id
+
+#         # Return the task IDs to the client
+#         return {
+#             # "audio_task_id": validate_and_generate_audio_task_id,
+#             "embedding_task_id": process_pdf_task_id,
+#             "insert_task_id": insert_task_id,
+#         }
+#     except Exception as e:
+#         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/add-to-rag-project/", response_model=NewRagPipelineResponse)
 async def append_sources_to_project(request: NewRagPipelineRequest, background_tasks: BackgroundTasks):

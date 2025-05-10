@@ -85,7 +85,22 @@ def insert_vector_supabase_record(client, table_name, source_id, project_id, con
         }).execute()
     except Exception as e:
         raise Exception(f"Failed to insert into Supabase vector-store: {e}")
-    
+
+
+def insert_note_supabase_record(client, table_name, user_id, project_id, note_content, note_type, is_sharable, created_at):
+    '''INSERT into table public.messages'''
+    try:
+        response = client.table(table_name).insert({
+            "user_id": user_id,
+            "project_id": project_id,
+            "note_type": note_type,
+            "content_markdown": note_content,
+            "created_at": created_at,
+            "is_sharable": is_sharable
+        }).execute()
+    except Exception as e:
+        raise Exception(f"Error saving messages: {e}")
+
 def insert_conversation_supabase_record(client, table_name, user_id, chat_session_id, dialogue_role, message_content, created_at):
     '''INSERT into table public.messages'''
     try:
