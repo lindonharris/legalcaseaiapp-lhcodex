@@ -44,7 +44,7 @@ def upload_to_s3(client, file_path, s3_object_key, bucket_name=s3_bucket_name):
                 "CacheControl": "public, max-age=31536000",     # Cache for 1 year
                 "Expires": expires_date
             },
-            cfg = TransferConfig(multipart_chunksize=8*1024*1024)   
+            Config = TransferConfig(multipart_chunksize=8*1024*1024)   
         )
         return f"https://{bucket_name}.s3.amazonaws.com/{s3_object_key}"
     except Exception as e:
