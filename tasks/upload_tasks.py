@@ -101,6 +101,7 @@ def process_pdf_task(self, files, metadata=None):
         self.update_state(
             state='PROCESSING',
             meta={
+                'start_time': task_start_time,
                 'stage': 'DOWNLOADING_AND_UPLOADING',
                 'message': f'Downloading and uploading {len(files)} files to S3',
                 'processed_files': 0,
@@ -135,6 +136,7 @@ def process_pdf_task(self, files, metadata=None):
                 self.update_state(
                     state='PROCESSING',
                     meta={
+                        'start_time': task_start_time,
                         'stage': 'UPLOADING_TO_S3',
                         'current_file': file.split('/')[-1],
                         'current_file_index': idx + 1,
@@ -171,6 +173,7 @@ def process_pdf_task(self, files, metadata=None):
                 self.update_state(
                     state='PROCESSING',
                     meta={
+                        'start_time': task_start_time,
                         'stage': 'FILE_PROCESSING_ERROR',
                         'current_file': file.split('/')[-1] if '/' in file else file,
                         'error_message': str(e),
@@ -190,6 +193,7 @@ def process_pdf_task(self, files, metadata=None):
         self.update_state(
             state='PROCESSING',
             meta={
+                'start_time': task_start_time,
                 'stage': 'DATABASE_INSERTION',
                 'message': f'Inserting {len(rows_to_insert)} document records into database',
                 'successful_files': successful_files,
@@ -211,6 +215,7 @@ def process_pdf_task(self, files, metadata=None):
             self.update_state(
                 state='PROCESSING',
                 meta={
+                    'start_time': task_start_time,
                     'stage': 'UPDATING_STATUS',
                     'message': f'Setting {len(source_ids)} documents to PENDING status',
                     'successful_files': successful_files,
