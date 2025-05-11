@@ -157,7 +157,7 @@ def process_pdf_task(self, files, metadata=None):
                     "vector_embed_status": "INITIALIZING",  # New initial status
                     "filename": file.split('/')[-1],  # Store original filename
                     "file_size_bytes": os.path.getsize(file_path),  # Store file size for reference
-                    "upload_timestamp": datetime.now(timezone.utc).isoformat()
+                    "created_at": datetime.now(timezone.utc).isoformat()
                 })
                 temp_paths.append(file_path)
                 successful_files += 1

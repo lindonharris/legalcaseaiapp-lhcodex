@@ -37,7 +37,7 @@ celery_app = Celery(
     backend=REDIS_LABS_ENDPOINT,            # RedisLabs instance url and password endpoint
     task_serializer='json',
     result_serializer='pickle',
-    accept_content=['json'],                # Accept only JSON content
+    accept_content=['json', 'pickle'],      # Accept JSON and pickle content
 )
 
 # Optional: Load configuration from a separate config file or object
