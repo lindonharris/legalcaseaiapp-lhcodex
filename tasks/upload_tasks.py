@@ -70,10 +70,11 @@ def process_pdf_task(self, files, metadata=None):
     """
     try:
         # Initialize task-level state that will be accessible via AsyncResult.info
+        task_start_time = datetime.now(timezone.utc).isoformat()
         self.update_state(
             state='PROCESSING',
             meta={
-                'start_time': datetime.now(timezone.utc).isoformat(),
+                'start_time': task_start_time,
                 'total_files': len(files),
                 'processed_files': 0,
                 'stage': 'INITIALIZING',
