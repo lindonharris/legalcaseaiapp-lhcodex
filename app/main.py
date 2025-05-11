@@ -16,9 +16,9 @@ from tasks.test_tasks import addition_task
 from tasks.chat_streaming_tasks import rag_chat_streaming_task
 from tasks.chat_tasks import rag_chat_task
 from tasks.note_tasks import rag_note_task 
-from celery import chain, chord, group 
+from celery import chain, chord, group, states
 from celery.result import AsyncResult
-import redis.asyncio as aioredis
+import redis.asyncio as aioredis 
 import logging
 
 # Configure logging (basic example, adjust as needed)
@@ -445,8 +445,8 @@ async def rag_chat_stream(request: RagQueryRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.post("/rag-upload-status/{task_id}")
-async def get_rag_upload_status(
+@app.post("/rag-upload-status_05112025/{task_id}")
+async def get_rag_upload_status_05112025(
     task_id: str, # Still useful to pass the initial task ID for context
     request_body: SourceIdsRequest # Accept source_ids in the request body
 ):
@@ -470,12 +470,6 @@ async def get_rag_upload_status(
                                     .select("id, vector_embed_status") \
                                     .in_("id", source_ids) \
                                     .execute()
-
-        # Check for database query errors
-        # if db_response._raw_error:
-        #     logger.error(f"Database query failed for status check: {db_response._raw_error}", exc_info=True)
-        #     # You might want to return a specific error status indicating DB issue
-        #     raise HTTPException(status_code=500, detail=f"Database query failed: {db_response._raw_error}")
 
         documents = db_response.data
 
@@ -525,137 +519,63 @@ async def get_rag_upload_status(
 @app.get("/pdf-upload-task-status/{task_id}")
 async def get_pdf_upload_status(task_id: str):
     """
-    Enhanced endpoint to check the status of the process_pdf_task task.
-
-    Returns detailed status information including:
-    - Basic task state (PENDING, SUCCESS, FAILURE)
-    - Processing stage information
-    - File progress counters
-    - Error details if applicable
-    - Source IDs once available
-    - Elapsed time
+    Returns JSON with:
+        - status: PENDING|STARTED|RETRY|SUCCESS|FAILURE
+        - on FAILURE: exc_type + exc_message + traceback
+        - on PROGRESS: stage, message, processed_files, total_files
+        - on SUCCESS: result payload + elapsed_time
     """
     try:
-        # A proxy object that allows you to fetch the status and result of any Celery task
-        result = AsyncResult(task_id) # Assuming your Celery app is configured
+        result = AsyncResult(task_id)
+        state  = result.state
+        info   = result.info if isinstance(result.info, dict) else {}
+        now    = datetime.now(timezone.utc)
 
-        # Get basic task state info
-        state = result.state
+        # Compute elapsed_time if start_time was set
+        elapsed = None
+        if info.get("start_time"):
+            st = datetime.fromisoformat(info["start_time"])
+            if st.tzinfo is None:
+                st = st.replace(tzinfo=timezone.utc)
+            elapsed = (now - st).total_seconds()
 
-        # Get additional metadata that tasks can add via update_state()
-        task_meta = result.info if isinstance(result.info, dict) else {}
-
-        # Calculate elapsed time if we have start_time
-        now = datetime.now(timezone.utc)
-        elapsed_time = None
-
-        start_time_str = task_meta.get("start_time")
-        if start_time_str:
-            try:
-                # Ensure start_time is timezone-aware if 'now' is, or make 'now' naive.
-                # Assuming start_time_str is in ISO format and includes timezone info or is UTC.
-                start_time = datetime.fromisoformat(start_time_str)
-                if start_time.tzinfo is None: # If start_time is naive, assume UTC
-                    start_time = start_time.replace(tzinfo=timezone.utc)
-                elapsed_time = (now - start_time).total_seconds()
-            except Exception as e:
-                logger.warning(f"Error parsing start_time '{start_time_str}': {e}")
-                # For timeout handling
-        # It seems this timeout logic was intended to be outside the start_time_str block
-        # or to have a default elapsed_time if start_time is not available.
-        # For this completion, I'll keep it reliant on elapsed_time being calculated.
-        if state == "PENDING" and elapsed_time and elapsed_time > 20: # 20 seconds timeout
+        if state == states.FAILURE:
             return {
-                "task_id": task_id,
-                "status": "TIMEOUT",
-                "elapsed_time": round(elapsed_time, 2) if elapsed_time is not None else None,
-                "message": "RAG document upload task has timed out. Please retry or check system logs."
+                "task_id":      task_id,
+                "status":       "FAILURE",
+                "error_type":   info.get("exc_type"),
+                "error_message": info.get("exc_message"),
+                "traceback":    result.traceback
             }
 
-        # For successful tasks - get the result if available
-        result_data = {}
-        if state == "SUCCESS": # result.ready() is implicitly true if state is SUCCESS
-            try:
-                # For the process_pdf_task, the result should include source_ids
-                task_result = result.result # This is where the actual return value of the task is
-                if isinstance(task_result, dict):
-                    result_data = task_result
-                    # If source_ids are available, include them in the response
-                    if "source_ids" in task_result:
-                        result_data["source_ids"] = task_result["source_ids"]
-                elif task_result is not None: # Handle cases where result is not a dict but is present
-                    result_data = {"value": task_result}
+        if state in (states.PENDING, states.STARTED, states.RETRY):
+            return {
+                "task_id":        task_id,
+                "status":         "IN_PROGRESS",
+                "stage":          info.get("stage"),
+                "message":        info.get("message"),
+                "processed":      info.get("processed_files"),
+                "total":          info.get("total_files"),
+                "elapsed_time_s": elapsed
+            }
 
-            except Exception as e:
-                logger.error(f"Error retrieving task result for task {task_id}: {e}", exc_info=True)
-                result_data = {"error_retrieving_result": str(e)}
-        elif state == "FAILURE":
-            # If the task failed, result.info often contains the exception.
-            # result.result would re-raise the exception.
-            # result.traceback might also be available.
-            error_info = {}
-            if isinstance(result.info, Exception):
-                error_info["error_message"] = str(result.info)
-            elif isinstance(result.info, dict): # Sometimes Celery puts error info in a dict
-                error_info = result.info
-            else: # Fallback
-                error_info["error_message"] = "Task failed with an unknown error."
-            if result.traceback:
-                error_info["traceback"] = result.traceback
-            result_data = error_info
+        if state == states.SUCCESS:
+            return {
+                "task_id":       task_id,
+                "status":        "SUCCESS",
+                "result":        result.result,      # the dict returned by process_pdf_task
+                "elapsed_time_s": elapsed
+            }
 
-        # Build enhanced response with all available information
-        response = {
+        # catch-all
+        return {
             "task_id": task_id,
-            "status": state,
+            "status":  state,
+            "info":    info
         }
 
-        # Add elapsed time if available
-        if elapsed_time is not None:
-            response["elapsed_time"] = round(elapsed_time, 2)
-
-        # Add stage information if available
-        if task_meta.get("stage"):
-            response["stage"] = task_meta.get("stage")
-
-        # Add progress message if available
-        if task_meta.get("message"):
-            response["message"] = task_meta.get("message")
-
-        # Add file progress if available - this was the part you were completing
-        if "processed_files" in task_meta and "total_files" in task_meta:
-            response["file_progress"] = {
-                "processed": task_meta["processed_files"],
-                "total": task_meta["total_files"] # Completed this line
-            }
-            # Optionally, calculate and add percentage
-            try:
-                processed = int(task_meta["processed_files"])
-                total = int(task_meta["total_files"])
-                if total > 0:
-                    response["file_progress"]["percentage"] = round((processed / total) * 100, 2)
-                else:
-                    response["file_progress"]["percentage"] = 0
-            except ValueError:
-                logger.warning(f"Could not parse file progress numbers for task {task_id}")
-
-
-        # Add the task's result data (e.g., source_ids or error info) to the response
-        if result_data: # Only add if not empty
-            # If it's a success, you might want to nest it under a 'result' key
-            if state == "SUCCESS":
-                response["result"] = result_data
-            elif state == "FAILURE":
-                response["error_details"] = result_data # Use a specific key for errors
-            else: # For other states, or if you want to merge directly
-                response.update(result_data) # Or response["data"] = result_data
-
-        return response
-
     except Exception as e:
-        logger.error(f"An unexpected error occurred while fetching status for task {task_id}: {e}", exc_info=True)
-        # This return was missing in your original snippet after the try-except block was defined
-        raise HTTPException(status_code=500, detail=f"Internal server error while fetching task status: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Status check error: {e}")
 
 @app.get("/pdf-upload-task-status_05112025/{task_id}")
 async def get_pdf_upload_status_05112025(task_id: str):
@@ -808,7 +728,7 @@ async def get_task_status(task_id: str):
 
     Limitations:
         No custom behavior or message formatting per task type.
-   """
+    """
     try:
         # A proxy object that allows you to fetch the status and result of any Celery task
         task_result = AsyncResult(task_id)

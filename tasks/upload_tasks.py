@@ -5,6 +5,7 @@ like api calls and calls to other services.
 
 from celery import Celery, chain, chord
 from celery.exceptions import MaxRetriesExceededError
+from celery import states
 import logging
 import os
 import json
@@ -35,6 +36,28 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_PROD_KEY")
 logger = logging.getLogger(__name__)
 
 # === PRODUCTION CELERY TASKS === #
+def update_db_poll_status(status: str, source_id: str, error_message: str = None):
+    """Helper function to update the status in the database."""
+    try:
+        # Define column K-V pair
+        update_payload = {"vector_embed_status": status}
+        if error_message:
+            # You might want a separate column for error messages
+            # For now, let's just log it and maybe add it to metadata if needed
+            logger.error(f"Setting status to {status} for source_id {str(source_id)} with error: {error_message}")
+            # Example: update_payload['error_message'] = error_message[:255] # Assuming a column exists
+
+        logger.debug(f"Attempting to update status for source_id {str(source_id)} to {status}")
+        update_resp = supabase_client.table("document_sources") \
+                                    .update(update_payload) \
+                                    .eq("id", str(source_id)) \
+                                    .execute()
+        
+        # If we get here it was successful
+        logger.debug(f"Successfully updated status for source_id {str(source_id)} to {status}.")
+
+    except Exception as db_e:
+        logger.error(f"CRITICAL: Failed to update status in DB for source_id {str(source_id)}: {db_e}", exc_info=True)
 
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
 def process_pdf_task(self, files, metadata=None):
@@ -66,14 +89,7 @@ def process_pdf_task(self, files, metadata=None):
 
         if not files:
             logger.warning("No files provided for processing.")
-            self.update_state(
-                state='FAILURE',
-                meta={
-                    'error': "No files provided",
-                    'message': "Please upload at least one PDF file before processing."
-                }
-            )
-            return {"error": "Please upload at least one PDF file before processing."}
+            raise ValueError("Please upload at least one PDF file before processing.")
         
         rows_to_insert = []
         temp_paths = []  # keep track of temps for cleanup
@@ -167,15 +183,6 @@ def process_pdf_task(self, files, metadata=None):
 
         if not rows_to_insert:
             logger.error("No successful uploads; aborting task.")
-            self.update_state(
-                state='FAILURE',
-                meta={
-                    'error': "All initial file processing/uploads failed.",
-                    'successful_files': 0,
-                    'failed_files': len(files),
-                    'message': "All file uploads failed"
-                }
-            )
             raise RuntimeError("All file uploads failed.")
 
         # === 2) Bulk insert into Supabase ===
@@ -258,17 +265,19 @@ def process_pdf_task(self, files, metadata=None):
                 logger.warning(f"[CELERY] Could not delete temp file {path}", exc_info=True)
 
         # === 4) Kick off the Chord (Embedding Tasks + Final Callback) ===
-        self.update_state(
-            state='PROCESSING',
-            meta={
-                'stage': 'INITIATING_EMBEDDING',
-                'message': f'Starting embedding tasks for {len(source_ids)} documents',
-                'successful_files': successful_files,
-                'failed_files': failed_files,
-                'source_ids': source_ids
-            }
-        )
-        
+        # self.update_state(
+        #     state='PROCESSING',
+        #     meta={
+        #         'stage': 'INITIATING_EMBEDDING',
+        #         'message': f'Starting embedding tasks for {len(source_ids)} documents',
+        #         'successful_files': successful_files,
+        #         'failed_files': failed_files,
+        #         'source_ids': source_ids
+        #     }
+        # )
+
+        logger.info(f"{self.name} prepared {len(source_ids)} source_ids, launching embedding chord")
+
         # Create a list of task signatures for the chord header
         embedding_tasks = [
             chunk_and_embed_task.s(
@@ -280,36 +289,41 @@ def process_pdf_task(self, files, metadata=None):
         ]
 
         # Define the chord body (the callback task)
-        callback_task = finalize_document_processing_workflow.s(source_ids)
+        callback = finalize_document_processing_workflow.s(source_ids)
+        chord_result = chord(embedding_tasks)(callback)
+        workflow_id = chord_result.id
+        logger.info(f"Chord launched; callback task ID = {workflow_id}")
+        # callback_task = finalize_document_processing_workflow.s(source_ids)
 
-        # Create the chord: group of embedding tasks followed by the callback
-        document_processing_chord = chord(embedding_tasks)(callback_task)
+        # # Create the chord: group of embedding tasks followed by the callback
+        # document_processing_chord = chord(embedding_tasks)(callback_task)
 
-        # Launch the chord
-        logger.info(f"Launching chord with {len(embedding_tasks)} embedding tasks and callback.")
-        document_processing_chord.delay()
+        # # Launch the chord
+        # logger.info(f"Launching chord with {len(embedding_tasks)} embedding tasks and callback.")
+        # document_processing_chord.delay()
 
-        # The final success log will be in the finalize_document_processing_workflow task.
-        logger.info(f"{self.name} launched chord for source_ids: {source_ids}. Task is now complete.")
+        # # The final success log will be in the finalize_document_processing_workflow task.
+        # logger.info(f"{self.name} launched chord for source_ids: {source_ids}. Task is now complete.")
         
         # Update final state with success and result information
         self.update_state(
             state='SUCCESS',
             meta={
                 'stage': 'COMPLETED',
-                'message': 'Document upload complete, embedding in progress',
+                'message': 'Document upload complete, embedding in progress...',
                 'successful_files': successful_files,
                 'failed_files': failed_files,
                 'source_ids': source_ids
             }
         )
 
-        # Return source_ids and task information
+        # Return the ID of the FINAL callback so you can poll it:
         return {
-            "source_ids": source_ids,
-            "successful_uploads": successful_files,
-            "failed_uploads": failed_files,
-            "total_files": len(files)
+            "source_ids":      source_ids,
+            "successful":      successful_files,
+            "failed":          failed_files,
+            "total":           len(files),
+            "workflow_task_id": workflow_id
         }
     
     except Exception as e:
@@ -636,30 +650,6 @@ def process_pdf_task_no_chord(self, files, metadata=None):
             ) from e
 
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
-def insert_sources_media_association_task(self, task_results):
-    """
-    Celery task to insert a row in TABLE `sources_media_association` table. Callback task to accept 
-    the list of results from the group tasks. The results will be in the order the tasks were defined in the group.
-    
-    - task_results: (list) containing results from process_pdf_task and validate_and_generate_audio_task
-    """
-    # Unpack the results
-    source_ids = task_results[0]
-    media_result = task_results[1]
-    media_id = media_result.get('media_id')
-
-    try:
-        for source_id in source_ids:
-            supabase_client.table('sources_media_association').insert({
-                'source_id': source_id,
-                'media_id': media_id
-            }).execute()
-        logger.info(f"Successfully linked source_ids {source_ids} with media_id {media_id}")
-    except Exception as e:
-        logger.error(f"Failed to insert into sources_media_association: {e}")
-        raise
-
-@celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
 def chunk_and_embed_task(self, pdf_url, source_id, project_id, chunk_size=1000, chunk_overlap=100):
     """
     Celery task to download, chunk, embed, and store embeddings of a PDF in Supabase. This step involved reading 
@@ -667,33 +657,10 @@ def chunk_and_embed_task(self, pdf_url, source_id, project_id, chunk_size=1000, 
     """
     temp_file = None
 
-    def update_status(status: str, error_message: str = None):
-        """Helper function to update the status in the database."""
-        try:
-            # Define column K-V pair
-            update_payload = {"vector_embed_status": status}
-            if error_message:
-                # You might want a separate column for error messages
-                # For now, let's just log it and maybe add it to metadata if needed
-                logger.error(f"Setting status to {status} for source_id {str(source_id)} with error: {error_message}")
-                # Example: update_payload['error_message'] = error_message[:255] # Assuming a column exists
-
-            logger.debug(f"Attempting to update status for source_id {str(source_id)} to {status}")
-            update_resp = supabase_client.table("document_sources") \
-                                        .update(update_payload) \
-                                        .eq("id", str(source_id)) \
-                                        .execute()
-            
-            # If we get here it was successful
-            logger.debug(f"Successfully updated status for source_id {str(source_id)} to {status}.")
-
-        except Exception as db_e:
-            logger.error(f"CRITICAL: Failed to update status in DB for source_id {str(source_id)}: {db_e}", exc_info=True)
-
     try:
         logger.info(f"Starting chunk_and_embed_task for URL: {pdf_url}, source_id: {str(source_id)}")
 
-        update_status("EMBEDDING")
+        update_db_poll_status("EMBEDDING", source_id)
 
         # 1) Download PDF
         response = requests.get(pdf_url)
@@ -748,18 +715,18 @@ def chunk_and_embed_task(self, pdf_url, source_id, project_id, chunk_size=1000, 
                             .insert(vector_rows) \
                             .execute()
         # Update status to COMPLETE after successful vector insert
-        update_status("COMPLETE")
+        update_db_poll_status("COMPLETE", source_id)
 
         logger.info(f"Bulk inserted {len(vector_rows)} embeddings into public.document_vector_store for source_id={source_id}")
 
     except Exception as e:
         logger.error(f"Failed chunk/embed for {pdf_url}: {e}", exc_info=True)
-        update_status("FAILED", error_message=str(e))
+        update_db_poll_status("FAILED", source_id, error_message=str(e))
         raise
     except OpenAIError as e:
         # Catch specific OpenAI errors for more targeted logging/handling if needed
         logger.error(f"OpenAI API error during embedding for {pdf_url}: {e}", exc_info=True)
-        update_status("FAILED", error_message=str(e))
+        update_db_poll_status("FAILED", source_id, error_message=str(e))
         raise self.retry(exc=e)
     finally:
         # 7) Cleanup temp file
