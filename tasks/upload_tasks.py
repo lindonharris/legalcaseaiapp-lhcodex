@@ -19,6 +19,7 @@ from utils.cloudfront_utils import get_cloudfront_url
 from utils.instruction_templates import INSTRUCTION_TEMPLATES
 from time import sleep
 from datetime import datetime, timezone
+from dotenv import load_dotenv
 import uuid
 
 # langchain dependencies
@@ -26,6 +27,10 @@ from langchain.text_splitter import CharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
 # from langchain.document_loaders import PyPDFLoader
 from langchain_community.document_loaders import PyPDFLoader
+
+# API Keys
+load_dotenv()
+OPENAI_API_KEY = os.environ.get("OPENAI_API_PROD_KEY")
 
 logger = logging.getLogger(__name__)
 
@@ -318,7 +323,7 @@ def chunk_and_embed_task(self, pdf_url, source_id, project_id, chunk_size=1000, 
         ]
 
         # 4) Batch embed all chunks in one call
-        embedding_model = OpenAIEmbeddings(model="text-embedding-ada-002")
+        embedding_model = OpenAIEmbeddings(model="text-embedding-ada-002")      # Will look for OPENAI_API_KEY environment variable
         embeddings = embedding_model.embed_documents(texts)
 
         # Guard against any mis-shape
