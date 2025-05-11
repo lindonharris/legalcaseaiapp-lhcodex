@@ -6,8 +6,9 @@ import os
 from dotenv import load_dotenv
 from pydantic import BaseModel
 from datetime import datetime, timezone
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Literal
 import uuid
+from fastapi import FastAPI, HTTPException, Query
 from utils.supabase_utils import supabase_client
 from utils.pdf_utils import extract_text_from_pdf
 from tasks.podcast_generate_tasks import validate_and_generate_audio_task, generate_dialogue_only_task
@@ -90,6 +91,19 @@ class NewRagPipelineRequest(BaseModel):
     ''' WeWeb specific pydantic struct for creation of a new RAG project '''
     files: List[str]  # List of URLs or file paths of the PDFs
     metadata: Dict[str, Any]  # A dictionary for any metadata information
+
+class EmbeddingStatusRequest(BaseModel):
+    ''' Pydantic struct for checking on chunk & embed task for a new RAG project '''
+    source_ids: List[str]  # List of uuids of documents being processed for RAG
+
+class DocumentStatus(BaseModel):
+    id: str
+    status: str
+
+class EmbeddingStatusResponse(BaseModel):
+    status: Literal["WORKFLOW_IN_PROGRESS","WORKFLOW_COMPLETE","WORKFLOW_ERROR"]
+    message: str
+    document_statuses: List[DocumentStatus]
 
 # New RAG pipeline response model
 class NewRagPipelineResponse(BaseModel):
@@ -519,6 +533,8 @@ async def get_rag_upload_status_05112025(
 @app.get("/pdf-upload-task-status/{task_id}")
 async def get_pdf_upload_status(task_id: str):
     """
+    Status checker for process_pdf_task(self, files, metadata=None)
+
     Returns JSON with:
         - status: PENDING|STARTED|RETRY|SUCCESS|FAILURE
         - on FAILURE: exc_type + exc_message + traceback
@@ -576,6 +592,59 @@ async def get_pdf_upload_status(task_id: str):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Status check error: {e}")
+
+@app.post(
+    "/embedding-pipeline-task-status",
+    response_model=EmbeddingStatusResponse,
+    summary="Check embedding status for a batch of documents"
+)
+async def embedding_pipeline_task_status(
+    req: EmbeddingStatusRequest
+):
+    """
+    Poll Supabase for the vector_embed_status of each document in `req.source_ids`.
+    Returns an overall workflow status plus per-document statuses.
+    """
+    try:
+        # 1) Fetch current statuses
+        resp = (
+            supabase_client
+                .table("document_sources")
+                .select("id, vector_embed_status")
+                .in_("id", req.source_ids)
+                .execute()
+        )
+        items = resp.data or []
+
+        # 2) Build per-document status list
+        doc_statuses = [
+            DocumentStatus(id=row["id"], status=row["vector_embed_status"])
+            for row in items
+        ]
+
+        # 3) Decide overall workflow status
+        statuses = {d.status for d in doc_statuses}
+        if "FAILED" in statuses:
+            overall = "WORKFLOW_ERROR"
+            msg = "One or more documents failed to embed."
+        elif statuses - {"COMPLETE"}:
+            overall = "WORKFLOW_IN_PROGRESS"
+            msg = "Document embedding is in progress."
+        else:
+            overall = "WORKFLOW_COMPLETE"
+            msg = "All documents have been embedded."
+
+        return EmbeddingStatusResponse(
+            status=overall,
+            message=msg,
+            document_statuses=doc_statuses
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not fetch embedding statuses: {e}"
+        )
 
 @app.get("/pdf-upload-task-status_05112025/{task_id}")
 async def get_pdf_upload_status_05112025(task_id: str):

@@ -37,27 +37,30 @@ logger = logging.getLogger(__name__)
 
 # === PRODUCTION CELERY TASKS === #
 def update_db_poll_status(status: str, source_id: str, error_message: str = None):
-    """Helper function to update the status in the database."""
+    """Helper function to update the status in document_sources."""
     try:
-        # Define column K-V pair
-        update_payload = {"vector_embed_status": status}
+        payload = {"vector_embed_status": status}
         if error_message:
-            # You might want a separate column for error messages
-            # For now, let's just log it and maybe add it to metadata if needed
-            logger.error(f"Setting status to {status} for source_id {str(source_id)} with error: {error_message}")
-            # Example: update_payload['error_message'] = error_message[:255] # Assuming a column exists
+            payload["error_message"] = error_message[:255]  # if you have that column
+            logger.error(f"[DB] Setting status={status} for {source_id} w/ error: {error_message}")
 
-        logger.debug(f"Attempting to update status for source_id {str(source_id)} to {status}")
-        update_resp = supabase_client.table("document_sources") \
-                                    .update(update_payload) \
-                                    .eq("id", str(source_id)) \
-                                    .execute()
-        
-        # If we get here it was successful
-        logger.debug(f"Successfully updated status for source_id {str(source_id)} to {status}.")
+        logger.debug(f"[DB] update document_sources set status={status} where id={source_id}")
+        update_resp = (
+            supabase_client
+                .table("document_sources")
+                .update(payload)
+                .eq("id", source_id)
+                .execute()
+        )
+
+        # **New**: inspect the Supabase response
+        if hasattr(update_resp, "data"):
+            logger.debug(f"[DB] Update returned data: {update_resp.data}")
+        if hasattr(update_resp, "status_code"):
+            logger.debug(f"[DB] HTTP status code: {update_resp.status_code}")
 
     except Exception as db_e:
-        logger.error(f"CRITICAL: Failed to update status in DB for source_id {str(source_id)}: {db_e}", exc_info=True)
+        logger.critical(f"[DB] Failed to update status for {source_id}: {db_e}", exc_info=True)
 
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
 def process_pdf_task(self, files, metadata=None):
