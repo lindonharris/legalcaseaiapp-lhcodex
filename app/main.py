@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from datetime import datetime, timezone
 from typing import List, Dict, Any
 import uuid
+from utils.supabase_utils import supabase_client
 from utils.pdf_utils import extract_text_from_pdf
 from tasks.podcast_generate_tasks import validate_and_generate_audio_task, generate_dialogue_only_task
 from tasks.upload_tasks import process_pdf_task, insert_sources_media_association_task
@@ -18,6 +19,11 @@ from tasks.note_tasks import rag_note_task
 from celery import chain, chord, group 
 from celery.result import AsyncResult
 import redis.asyncio as aioredis
+import logging
+
+# Configure logging (basic example, adjust as needed)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # FastAPI
 from fastapi import FastAPI, BackgroundTasks, HTTPException, WebSocket, WebSocketDisconnect
@@ -92,6 +98,10 @@ class NewRagPipelineResponse(BaseModel):
 # Chained RAG pipeline response model
 class NewRagAndNoteResponse(BaseModel):
     workflow_id: str             # the chain’s overall task ID
+
+class SourceIdsRequest(BaseModel):
+    """Request body model for the status endpoint for checking the RAG pipeline upload."""
+    source_ids: List[str]
 
 # Pydantic model for the response
 class PDFResponse(BaseModel):
@@ -196,7 +206,10 @@ async def celery_test_addition(request: AdditionRequest):
 #               RAG API ENDPOINTS
 # ================================================ #
 @app.post("/new-rag-project/", response_model=NewRagPipelineResponse)
-async def create_new_rag_project(request: NewRagPipelineRequest, background_tasks: BackgroundTasks):
+async def create_new_rag_project(
+    request: NewRagPipelineRequest, 
+    background_tasks: BackgroundTasks
+):
     '''
     Endpoint to ONLY create a RAG pipeline for user project:
         - process_pdf_task:
@@ -218,7 +231,10 @@ async def create_new_rag_project(request: NewRagPipelineRequest, background_task
         raise HTTPException(status_code=500, detail=str(e))
     
 @app.post("/new-rag-and-notes/", response_model=NewRagAndNoteResponse)
-async def create_new_rag_project_and_gen_notes(request: NewRagPipelineRequest, background_tasks: BackgroundTasks):
+async def create_new_rag_project_and_gen_notes(
+    request: NewRagPipelineRequest, 
+    background_tasks: BackgroundTasks
+):
     '''
     Endpoint to create BOTH a RAG pipeline and a "quick action" AI note, chaining 2 celery notes together
         - process_pdf_task():
@@ -403,6 +419,83 @@ async def rag_chat_stream(request: RagQueryRequest):
         return {"task_id": task.id}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/rag-upload-status/{task_id}")
+async def get_rag_upload_status(
+    task_id: str, # Still useful to pass the initial task ID for context
+    request_body: SourceIdsRequest # Accept source_ids in the request body
+):
+    """
+    Check the status of the RAG document processing workflow by querying
+    the vector_embed_status in the database for the provided source_ids.
+    """
+    source_ids = request_body.source_ids
+
+    if not source_ids:
+        return {
+            "task_id": task_id, # Include initial task ID for reference
+            "status": "INVALID_REQUEST",
+            "message": "No source_ids provided in the request body."
+        }
+
+    try:
+        # Query the database for the status of the relevant documents
+        logger.debug(f"Querying DB for status of source_ids: {source_ids}")
+        db_response = supabase_client.table("document_sources") \
+                                    .select("id, vector_embed_status") \
+                                    .in_("id", source_ids) \
+                                    .execute()
+
+        # Check for database query errors
+        if db_response.error:
+            logger.error(f"Database query failed for status check: {db_response.error}", exc_info=True)
+            # You might want to return a specific error status indicating DB issue
+            raise HTTPException(status_code=500, detail=f"Database query failed: {db_response.error}")
+
+        documents = db_response.data
+
+        if not documents:
+            # This could happen if the provided source_ids don't exist
+            return {
+                "task_id": task_id, # Include initial task ID for reference
+                "status": "DOCUMENTS_NOT_FOUND",
+                "message": f"Could not find documents with IDs {source_ids} in the database."
+            }
+
+        # Determine overall status based on individual document statuses
+        statuses = [doc.get("vector_embed_status") for doc in documents if doc.get("vector_embed_status")]
+
+        if "FAILED" in statuses:
+            overall_status = "WORKFLOW_FAILED"
+            message = "One or more documents failed during embedding."
+        elif all(status == "COMPLETE" for status in statuses):
+            overall_status = "WORKFLOW_COMPLETE"
+            message = "All documents processed and embedded successfully."
+        # If not failed and not all complete, it's still in progress
+        elif any(status in ["PENDING", "UPLOADING", "EMBEDDING"] for status in statuses):
+            overall_status = "WORKFLOW_IN_PROGRESS"
+            message = "Document embedding is in progress."
+        else:
+            # Fallback for unexpected statuses
+            overall_status = "WORKFLOW_UNKNOWN_STATUS"
+            message = "Could not determine overall workflow status from document statuses."
+            logger.warning(f"Unexpected document statuses encountered for source_ids {source_ids}: {statuses}")
+
+
+        # Prepare individual document statuses for the response
+        document_statuses = [{"id": doc.get("id"), "status": doc.get("vector_embed_status")} for doc in documents]
+
+        return {
+            "task_id": task_id, # Include initial task ID for reference
+            "status": overall_status, # This is the derived workflow status
+            "message": message,
+            "document_statuses": document_statuses # Detailed status per document
+        }
+
+    except Exception as e:
+        logger.error(f"Error retrieving or processing database status for task {task_id} and source_ids {source_ids}: {e}", exc_info=True)
+        # Return an error indicating the status check itself failed
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve workflow status: {e}")
 
 @app.get("/rag-chat-status/{task_id}")
 async def get_rag_chat_status(task_id: str):
