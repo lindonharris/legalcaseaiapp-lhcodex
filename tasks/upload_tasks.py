@@ -165,7 +165,7 @@ def process_pdf_task(self, files, metadata=None):
         ]
 
         # Define the chord body (the callback task)
-        callback_task = finalize_document_processing_workflow.s(source_ids=source_ids)
+        callback_task = finalize_document_processing_workflow.s(source_ids)
 
         # Create the chord: group of embedding tasks followed by the callback
         document_processing_chord = chord(embedding_tasks)(callback_task)
@@ -460,7 +460,7 @@ def chunk_and_embed_task(self, pdf_url, source_id, project_id, chunk_size=1000, 
     return None
 
 @celery_app.task(bind=True)
-def finalize_document_processing_workflow(self, results):
+def finalize_document_processing_workflow(self, results, source_ids=None):
     """
     Celery task that runs after all chunk_and_embed_task tasks in a chord complete.
     Logs the final success message for the entire workflow.
