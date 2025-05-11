@@ -323,13 +323,17 @@ def chunk_and_embed_task(self, pdf_url, source_id, project_id, chunk_size=1000, 
         ]
 
         # 4) Batch embed all chunks in one call
-        embedding_model = OpenAIEmbeddings(model="text-embedding-ada-002")      # Will look for OPENAI_API_KEY environment variable
+        embedding_model = OpenAIEmbeddings(
+            model="text-embedding-ada-002",
+            api_key=OPENAI_API_KEY)
         embeddings = embedding_model.embed_documents(texts)
 
-        # Guard against any mis-shape
-        for i, vec in enumerate(embeddings):
-            if len(vec) != 1536:
-                raise ValueError(f"Embedding #{i} has length {len(vec)}; expected 1536")
+        # Guard against any mis-shaped vector dimensions
+        expected_embedding_length = 1536   # ada-002 produces 1536 dimensions
+        for i, vec in enumerate(embeddings):  
+            
+            if len(vec) != expected_embedding_length:
+                raise ValueError(f"Embedding #{i} has length {len(vec)}; expected {expected_embedding_length}")
 
         # 5) Build rows for bulk insert
         vector_rows = []
