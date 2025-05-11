@@ -108,24 +108,24 @@ def process_pdf_task(self, files, metadata=None):
 
         # === 2) Bulk insert into Supabase ===
         try:
-            resp = supabase_client.table("document_sources") \
+            response = supabase_client.table("document_sources") \
                                 .insert(rows_to_insert) \
                                 .execute()
-            if resp.status not in (200, 201):
-                raise RuntimeError(f"Supabase insert failed: {resp.data}")
-
-            source_ids = [r["id"] for r in resp.data]
+            source_ids = [r["id"] for r in response.data]
 
             # Loop thorugh reoponse to get, source_id list for the chaining/vector_embed tasks
-            source_ids = [r["id"] for r in resp.data]
+            source_ids = [r["id"] for r in response.data]
             logger.info(f"Bulk insert succeeded, got source_ids={source_ids}")
 
         except Exception as e:
             logger.error(f"[Supabase] Bulk insert failed: {e}", exc_info=True)
             # cleanup temp files before re-raising
             for p in temp_paths:
-                try: os.unlink(p)
-                except: pass
+                try: 
+                    os.unlink(p)
+                    logger.debug(f"Deleted temp file {p} after Supabase insert failure.")
+                except: 
+                    logger.warning(f"[CELERY] Could not delete temp file {p} during Supabase failure cleanup.", exc_info=True)
             raise
 
         # === 3) Cleanup temp files ===
