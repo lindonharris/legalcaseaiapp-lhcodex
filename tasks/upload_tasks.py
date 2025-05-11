@@ -238,6 +238,9 @@ def process_pdf_task(self, files, metadata=None):
             self.update_state(
                 state='FAILURE',
                 meta={
+                    'exc_type':     type(e).__name__,
+                    'exc_module':   e.__class__.__module__,
+                    'exc_message':  str(e),
                     'error': f"Initial DB insert failed: {str(e)}",
                     'stage': 'DATABASE_ERROR',
                     'message': f'Database insertion failed: {str(e)[:100]}...'
@@ -265,16 +268,16 @@ def process_pdf_task(self, files, metadata=None):
                 logger.warning(f"[CELERY] Could not delete temp file {path}", exc_info=True)
 
         # === 4) Kick off the Chord (Embedding Tasks + Final Callback) ===
-        # self.update_state(
-        #     state='PROCESSING',
-        #     meta={
-        #         'stage': 'INITIATING_EMBEDDING',
-        #         'message': f'Starting embedding tasks for {len(source_ids)} documents',
-        #         'successful_files': successful_files,
-        #         'failed_files': failed_files,
-        #         'source_ids': source_ids
-        #     }
-        # )
+        self.update_state(
+            state='PROCESSING',
+            meta={
+                'stage': 'INITIATING_EMBEDDING',
+                'message': f'Starting embedding tasks for {len(source_ids)} documents',
+                'successful_files': successful_files,
+                'failed_files': failed_files,
+                'source_ids': source_ids
+            }
+        )
 
         logger.info(f"{self.name} prepared {len(source_ids)} source_ids, launching embedding chord")
 
@@ -295,16 +298,6 @@ def process_pdf_task(self, files, metadata=None):
         logger.info(f"Chord launched; callback task ID = {workflow_id}")
         # callback_task = finalize_document_processing_workflow.s(source_ids)
 
-        # # Create the chord: group of embedding tasks followed by the callback
-        # document_processing_chord = chord(embedding_tasks)(callback_task)
-
-        # # Launch the chord
-        # logger.info(f"Launching chord with {len(embedding_tasks)} embedding tasks and callback.")
-        # document_processing_chord.delay()
-
-        # # The final success log will be in the finalize_document_processing_workflow task.
-        # logger.info(f"{self.name} launched chord for source_ids: {source_ids}. Task is now complete.")
-        
         # Update final state with success and result information
         self.update_state(
             state='SUCCESS',
@@ -352,6 +345,9 @@ def process_pdf_task(self, files, metadata=None):
             self.update_state(
                 state='FAILURE',
                 meta={
+                    'exc_type':     type(e).__name__,
+                    'exc_module':   e.__class__.__module__,
+                    'exc_message':  str(e),
                     'error': str(e),
                     'retry_count': self.max_retries,
                     'max_retries': self.max_retries,
@@ -393,7 +389,15 @@ def process_pdf_task_05112025(self, files, metadata=None):
 
         if not files:
             logger.warning("No files provided for processing.")
-            self.update_state(state='FAILURE', meta={'error': "No files provided"})
+            self.update_state(
+                state='FAILURE', 
+                meta={
+                    'exc_type':     type(e).__name__,
+                    'exc_module':   e.__class__.__module__,
+                    'exc_message':  str(e),
+                    'error': "No files provided"
+                }
+            )
             return {"error": "Please upload at least one PDF file before processing."}
         
         rows_to_insert = []

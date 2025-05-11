@@ -36,7 +36,7 @@ celery_app = Celery(
     broker=CLOUD_AMQP_ENDPOINT,             # AMQP instance url and password endpoint
     backend=REDIS_LABS_ENDPOINT,            # RedisLabs instance url and password endpoint
     task_serializer='json',
-    result_serializer='json',
+    result_serializer='pickle',
     accept_content=['json'],                # Accept only JSON content
 )
 
