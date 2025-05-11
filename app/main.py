@@ -236,6 +236,7 @@ async def create_new_rag_project(
             user_id: UUID
             project_id: UUID
             model_type: string (optional) 
+            quick_action: string
         }
     '''
     try:
@@ -459,77 +460,6 @@ async def rag_chat_stream(request: RagQueryRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.post("/rag-upload-status_05112025/{task_id}")
-async def get_rag_upload_status_05112025(
-    task_id: str, # Still useful to pass the initial task ID for context
-    request_body: SourceIdsRequest # Accept source_ids in the request body
-):
-    """
-    Check the status of the RAG document processing workflow by querying
-    the vector_embed_status in the database for the provided source_ids.
-    """
-    source_ids = request_body.source_ids
-
-    if not source_ids:
-        return {
-            "task_id": task_id, # Include initial task ID for reference
-            "status": "INVALID_REQUEST",
-            "message": "No source_ids provided in the request body."
-        }
-
-    try:
-        # Query the database for the status of the relevant documents
-        logger.debug(f"Querying DB for status of source_ids: {source_ids}")
-        db_response = supabase_client.table("document_sources") \
-                                    .select("id, vector_embed_status") \
-                                    .in_("id", source_ids) \
-                                    .execute()
-
-        documents = db_response.data
-
-        if not documents:
-            # This could happen if the provided source_ids don't exist
-            return {
-                "task_id": task_id, # Include initial task ID for reference
-                "status": "DOCUMENTS_NOT_FOUND",
-                "message": f"Could not find documents with IDs {source_ids} in the database."
-            }
-
-        # Determine overall status based on individual document statuses
-        statuses = [doc.get("vector_embed_status") for doc in documents if doc.get("vector_embed_status")]
-
-        if "FAILED" in statuses:
-            overall_status = "WORKFLOW_FAILED"
-            message = "One or more documents failed during embedding."
-        elif all(status == "COMPLETE" for status in statuses):
-            overall_status = "WORKFLOW_COMPLETE"
-            message = "All documents processed and embedded successfully."
-        # If not failed and not all complete, it's still in progress
-        elif any(status in ["PENDING", "UPLOADING", "EMBEDDING"] for status in statuses):
-            overall_status = "WORKFLOW_IN_PROGRESS"
-            message = "Document embedding is in progress."
-        else:
-            # Fallback for unexpected statuses
-            overall_status = "WORKFLOW_UNKNOWN_STATUS"
-            message = "Could not determine overall workflow status from document statuses."
-            logger.warning(f"Unexpected document statuses encountered for source_ids {source_ids}: {statuses}")
-
-
-        # Prepare individual document statuses for the response
-        document_statuses = [{"id": doc.get("id"), "status": doc.get("vector_embed_status")} for doc in documents]
-
-        return {
-            "task_id": task_id, # Include initial task ID for reference
-            "status": overall_status, # This is the derived workflow status
-            "message": message,
-            "document_statuses": document_statuses # Detailed status per document
-        }
-
-    except Exception as e:
-        logger.error(f"Error retrieving or processing database status for task {task_id} and source_ids {source_ids}: {e}", exc_info=True)
-        # Return an error indicating the status check itself failed
-        raise HTTPException(status_code=500, detail=f"Failed to retrieve workflow status: {e}")
-
 @app.get("/pdf-upload-task-status/{task_id}")
 async def get_pdf_upload_status(task_id: str):
     """
@@ -645,46 +575,6 @@ async def embedding_pipeline_task_status(
             status_code=500,
             detail=f"Could not fetch embedding statuses: {e}"
         )
-
-@app.get("/pdf-upload-task-status_05112025/{task_id}")
-async def get_pdf_upload_status_05112025(task_id: str):
-    """
-    Check task status of the result of the process_pdf_task() task.
-    Includes timeout if stuck in PENDING > 20s    
-    """
-    # A proxy object that allows you to fetch the status and result of any Celery task
-    result = AsyncResult(task_id)
-
-    # Retrieve task metadata
-    task_meta = result.info if isinstance(result.info, dict) else {}
-    now = datetime.now(timezone.utc)
-
-    # Use explicitly set start_time if available
-    start_time_str = task_meta.get("start_time")
-    if start_time_str:
-        try:
-            start_time = datetime.fromisoformat(start_time_str)
-            elapsed = (now - start_time).total_seconds()
-        except Exception:
-            elapsed = None
-    else:
-        elapsed = None  # fallback if broker doesn't store this
-
-    if result.state == "PENDING":
-        if elapsed and elapsed > 20:
-            return {
-                "task_id": task_id,
-                "status": "TIMEOUT",
-                "elapsed_time": elapsed,
-                "message": "RAG task has exceeded 20 seconds. You may retry."
-            }
-        return {"task_id": task_id, "status": "PENDING", "elapsed_time": elapsed}
-    elif result.state == "SUCCESS":
-        return {"task_id": task_id, "status": "SUCCESS", "result": result.result}
-    elif result.state == "FAILURE":
-        return {"task_id": task_id, "status": "FAILURE", "error": str(result.result)}
-    else:
-        return {"task_id": task_id, "status": result.state}
 
 @app.get("/rag-chat-status/{task_id}")
 async def get_rag_chat_status(task_id: str):

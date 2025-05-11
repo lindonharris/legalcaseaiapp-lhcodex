@@ -12,6 +12,7 @@ import json
 import psutil
 import requests
 import tempfile
+from tasks.note_tasks import rag_note_task 
 from tasks.celery_app import celery_app  # Import the Celery app instance (see celery_app.py for LocalHost config)
 from utils.audio_utils import generate_audio, generate_only_dialogue_text
 from utils.s3_utils import upload_to_s3, generate_presigned_url, s3_client, s3_bucket_name
@@ -70,6 +71,15 @@ def process_pdf_task(self, files, metadata=None):
         2) save to Supabase, 
         3) and trigger vector embedding tasks.
     Includes enhanced status tracking.
+
+    Args:
+    files (List): Containing file CDN urls (created by WeWeb's document upload element)
+    metadata (json): {
+        'user_id': UUID,
+        'project_id': UUID,
+        'model_type': 'gpt-4o-mini', 'llama3.1'...,
+        'note_type': 'case_summary'
+
     """
     try:
         # Initialize task-level state that will be accessible via AsyncResult.info
@@ -301,11 +311,16 @@ def process_pdf_task(self, files, metadata=None):
         ]
 
         # Define the chord body (the callback task)
-        callback = finalize_document_processing_workflow.s(source_ids)
+        callback = finalize_document_processing_workflow.s(
+            str(metadata["user_id"]),
+            source_ids,
+            str(metadata["project_id"]),
+            str(metadata["note_type"]),     # flag to determine if this is just RAG embedding or... RAG Embedding + note genereation
+            str(metadata["model_type"])       
+        )
         chord_result = chord(embedding_tasks)(callback)
         workflow_id = chord_result.id
         logger.info(f"Chord launched; callback task ID = {workflow_id}")
-        # callback_task = finalize_document_processing_workflow.s(source_ids)
 
         # Update final state with success and result information
         self.update_state(
@@ -768,10 +783,18 @@ def chunk_and_embed_task(self, pdf_url, source_id, project_id, chunk_size=1000, 
     return None
 
 @celery_app.task(bind=True)
-def finalize_document_processing_workflow(self, results, source_ids=None):
+def finalize_document_processing_workflow(
+    self, 
+    user_id, 
+    results, 
+    project_id, 
+    note_type, 
+    model_type,
+    source_ids=None
+):
     """
-    Celery task that runs after all chunk_and_embed_task tasks in a chord complete.
-    Enhanced with detailed reporting.
+    Celery callback after all chunk_and_embed_task tasks in a chord complete.
+    Contains enhanced with detailed reporting, and automatic rag_note_task firing once embeddings are done.
     """
     try:
         logger.info(f"All embedding tasks in the workflow have completed.")
@@ -796,6 +819,7 @@ def finalize_document_processing_workflow(self, results, source_ids=None):
                 .in_("source_id", source_ids)
                 .execute()  # no count parameter here
             )
+
             # Get vector count
             vector_count = vectors_data.count if hasattr(vectors_data, 'count') else 0
                                         
@@ -805,10 +829,7 @@ def finalize_document_processing_workflow(self, results, source_ids=None):
             for source in sources:
                 status = source.get("vector_embed_status", "UNKNOWN")
                 status_counts[status] = status_counts.get(status, 0) + 1
-                
-            # # Get vector count
-            # vector_count = vectors_data.count if hasattr(vectors_data, 'count') else 0
-            
+
             # Log detailed completion information
             logger.info(
                 f"Document processing workflow completed with:\n"
@@ -816,6 +837,27 @@ def finalize_document_processing_workflow(self, results, source_ids=None):
                 f"- Status counts: {status_counts}\n"
                 f"- Total vectors: {vector_count}"
             )
+
+            # 4) Determine overall embedding status
+            statuses = set(status_counts.keys())
+            if "FAILED" in statuses:
+                workflow_status = "ERROR"
+            elif statuses - {"COMPLETE"}:
+                workflow_status = "IN_PROGRESS"
+            else:
+                workflow_status = "COMPLETE"
+
+            # 5) Fire the note‐generation as soon as everything’s COMPLETE
+            # `note_type` is a string, and can be set to "summary", "flashcards", "compare_contrast"
+            # depending on that type of note the user wants generated
+            if workflow_status == "COMPLETE" and note_type != "None":   # quick_action is a string not a bool
+                logger.info(f"All embeddings DONE—queuing rag_note_task(project_id={project_id})")
+                rag_note_task.apply_async(args=[
+                    user_id,
+                    note_type,
+                    project_id,
+                    model_type
+                ])
             
             # Update a workflow status record if needed
             # This could be useful for tracking overall workflow status in a separate table

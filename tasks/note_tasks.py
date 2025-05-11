@@ -77,13 +77,19 @@ def get_chat_llm(model_name: str = "gpt-4o-mini", callback_manager: CallbackMana
     )
 
 @celery_app.task(bind=True, base=BaseTaskWithRetry)
-def rag_note_task(self, user_id, query, project_id, model_type):
+def rag_note_task(
+    self, 
+    user_id, 
+    query, 
+    project_id, 
+    model_type
+):
     """
     Main RAG workflow:
-    2. Embed the note format prompt
-    3. Retrieve relevant document chunks
-    4. Stream LLM response tokens to client and collect full answer
-    5. Persist query and answer in Supabase
+    1. Embed the generate note query as dim-1536
+    2. Retrieve relevant document chunks
+    3. Stream LLM response tokens to client and collect full answer
+    4. Persist query and answer in Supabase
     """
     try:
         # Set explicit start time metadata
