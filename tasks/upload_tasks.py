@@ -25,8 +25,8 @@ import uuid
 # langchain dependencies
 from langchain.text_splitter import CharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
-# from langchain.document_loaders import PyPDFLoader
 from langchain_community.document_loaders import PyPDFLoader
+from openai import OpenAIError
 
 # API Keys
 load_dotenv()
@@ -339,14 +339,15 @@ def chunk_and_embed_task(self, pdf_url, source_id, project_id, chunk_size=1000, 
         vector_rows = []
         for text, meta, vector in zip(texts, metadatas, embeddings):
             vector_rows.append({
-                "source_id": source_id,
+                "source_id": str(source_id),    # Enforce type check
                 "content": text,
                 "metadata": meta,
                 "embedding": vector,
-                "project_id": project_id
+                "project_id": str(project_id)   # Enforce type check
             })
 
         # 6) Bulk insert into Supabase
+        logger.debug("Attempting Supabase bulk vector insert into public.document_vector_store.")
         resp = supabase_client.table("document_vector_store") \
                              .insert(vector_rows) \
                              .execute()
@@ -359,6 +360,10 @@ def chunk_and_embed_task(self, pdf_url, source_id, project_id, chunk_size=1000, 
     except Exception as e:
         logger.error(f"Failed chunk/embed for {pdf_url}: {e}", exc_info=True)
         raise
+    except OpenAIError as e:
+        # Catch specific OpenAI errors for more targeted logging/handling if needed
+        logger.error(f"OpenAI API error during embedding for {pdf_url}: {e}", exc_info=True)
+        raise self.retry(exc=e)
     finally:
         # 7) Cleanup temp file
         if temp_file is not None:
