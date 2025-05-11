@@ -1,5 +1,6 @@
 import os
 import json
+import logging
 import uuid
 import boto3
 from supabase import create_client, Client
@@ -13,6 +14,9 @@ supabase_client: Client = create_client(
     os.getenv('SUPABASE_PROJECT_URL'), 
     os.getenv('SUPABASE_SERVICE_ROLE_KEY')  # Ensure this key is the service role
 )
+
+# Init logger
+logger = logging.getLogger(__name__)
 
 def insert_mp3_supabase_record(
         client, 
@@ -83,6 +87,7 @@ def insert_vector_supabase_record(client, table_name, source_id, project_id, con
             "embedding": embedding,
             "project_id": project_id
         }).execute()
+        logger.info(f"Response status={response.status} and statusText={response.statusText}")
     except Exception as e:
         raise Exception(f"Failed to insert into Supabase vector-store: {e}")
 
