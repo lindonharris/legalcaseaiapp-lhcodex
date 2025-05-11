@@ -447,10 +447,10 @@ async def get_rag_upload_status(
                                     .execute()
 
         # Check for database query errors
-        if db_response.error:
-            logger.error(f"Database query failed for status check: {db_response.error}", exc_info=True)
-            # You might want to return a specific error status indicating DB issue
-            raise HTTPException(status_code=500, detail=f"Database query failed: {db_response.error}")
+        # if db_response.error:
+        #     logger.error(f"Database query failed for status check: {db_response.error}", exc_info=True)
+        #     # You might want to return a specific error status indicating DB issue
+        #     raise HTTPException(status_code=500, detail=f"Database query failed: {db_response.error}")
 
         documents = db_response.data
 

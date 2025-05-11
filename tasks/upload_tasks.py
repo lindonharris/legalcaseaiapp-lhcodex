@@ -128,11 +128,9 @@ def process_pdf_task(self, files, metadata=None):
 
             # Update status in Supabase to PENDING for embedding after successful initial insert (for each file in the batch)
             update_payload = [{"id": sid, "vector_embed_status": "PENDING"} for sid in source_ids]
-            update_resp = supabase_client.table("document_sources").upsert(update_payload).execute()
-            if update_resp.error:
-                logger.warning(f"Failed to update status to PENDING for source_ids {source_ids}: {update_resp.error}", exc_info=True)
-            else:
-                logger.debug(f"Updated status to PENDING for source_ids: {source_ids}")
+            update_resp = supabase_client.table("document_sources") \
+                                .upsert(update_payload) \
+                                .execute()
 
         except Exception as e:
             logger.error(f"[Supabase] Bulk insert failed: {e}", exc_info=True)
@@ -373,11 +371,9 @@ def chunk_and_embed_task(self, pdf_url, source_id, project_id, chunk_size=1000, 
                                         .update(update_payload) \
                                         .eq("id", str(source_id)) \
                                         .execute()
-
-            if update_resp.error:
-                logger.warning(f"Failed to update status to {status} for source_id {str(source_id)}: {update_resp.error}", exc_info=True)
-            else:
-                logger.debug(f"Successfully updated status for source_id {str(source_id)} to {status}.")
+            
+            # If we get here it was successful
+            logger.debug(f"Successfully updated status for source_id {str(source_id)} to {status}.")
 
         except Exception as db_e:
             logger.error(f"CRITICAL: Failed to update status in DB for source_id {str(source_id)}: {db_e}", exc_info=True)
