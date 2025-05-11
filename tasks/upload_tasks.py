@@ -786,10 +786,15 @@ def finalize_document_processing_workflow(self, results, source_ids=None):
                                         .execute()
                                         
             # Get the count of vectors created
-            vectors_data = supabase_client.table("document_vector_store") \
-                                        .select("count", count_option="exact") \
-                                        .in_("source_id", source_ids) \
-                                        .execute()
+            vectors_data = (
+                supabase_client
+                .table("document_vector_store")
+                .select("*")                   # or just the ID field: "id"
+                .in_("source_id", source_ids)
+                .execute(count="exact")        # count flag goes here
+            )
+            # Get vector count
+            vector_count = vectors_data.count if hasattr(vectors_data, 'count') else 0
                                         
             # Process status counts
             sources = sources_data.data if hasattr(sources_data, 'data') else []
@@ -798,8 +803,8 @@ def finalize_document_processing_workflow(self, results, source_ids=None):
                 status = source.get("vector_embed_status", "UNKNOWN")
                 status_counts[status] = status_counts.get(status, 0) + 1
                 
-            # Get vector count
-            vector_count = vectors_data.count if hasattr(vectors_data, 'count') else 0
+            # # Get vector count
+            # vector_count = vectors_data.count if hasattr(vectors_data, 'count') else 0
             
             # Log detailed completion information
             logger.info(
