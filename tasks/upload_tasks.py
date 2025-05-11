@@ -449,7 +449,15 @@ def process_pdf_task_05112025(self, files, metadata=None):
 
         if not rows_to_insert:
             logger.error("No successful uploads; aborting task.")
-            self.update_state(state='FAILURE', meta={'error': "All initial file processing/uploads failed."})
+            self.update_state(
+                state='FAILURE', 
+                meta={
+                    'exc_type':     type(e).__name__,
+                    'exc_module':   e.__class__.__module__,
+                    'exc_message':  str(e),
+                    'error': "All initial file processing/uploads failed."
+                }
+            )
             raise RuntimeError("All file uploads failed.")
 
         # === 2) Bulk insert into Supabase ===
@@ -478,7 +486,15 @@ def process_pdf_task_05112025(self, files, metadata=None):
                 except: 
                     logger.warning(f"[CELERY] Could not delete temp file {p} during Supabase failure cleanup.", exc_info=True)
             # Update task state
-            self.update_state(state='FAILURE', meta={'error': f"Initial DB insert failed: {e}"})
+            self.update_state(
+                state='FAILURE', 
+                meta={
+                    'exc_type':     type(e).__name__,
+                    'exc_module':   e.__class__.__module__,
+                    'exc_message':  str(e),
+                    'error': f"Initial DB insert failed: {e}"
+                }
+            )
             raise
 
         # === 3) Cleanup temp files ===
