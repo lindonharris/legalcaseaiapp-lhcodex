@@ -658,7 +658,7 @@ async def get_pdf_upload_status(task_id: str):
         raise HTTPException(status_code=500, detail=f"Internal server error while fetching task status: {str(e)}")
 
 @app.get("/pdf-upload-task-status_05112025/{task_id}")
-async def get_pdf_upload_status(task_id: str):
+async def get_pdf_upload_status_05112025(task_id: str):
     """
     Check task status of the result of the process_pdf_task() task.
     Includes timeout if stuck in PENDING > 20s    
