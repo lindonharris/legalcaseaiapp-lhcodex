@@ -120,7 +120,7 @@ def process_pdf_task(self, files, metadata=None):
 
             # Loop thorugh reoponse to get, source_id list for the chaining/vector_embed tasks
             source_ids = [r["id"] for r in response.data]
-            logger.info(f"Bulk insert succeeded, got source_ids={source_ids}")
+            logger.info(f"Bulk insert succeeded into public.document_sources, got source_ids={source_ids}")
 
         except Exception as e:
             logger.error(f"[Supabase] Bulk insert failed: {e}", exc_info=True)
@@ -350,11 +350,11 @@ def chunk_and_embed_task(self, pdf_url, source_id, project_id, chunk_size=1000, 
         resp = supabase_client.table("document_vector_store") \
                              .insert(vector_rows) \
                              .execute()
-        if resp.error:
-            logger.error(f"Supabase bulk vector insert failed: {resp.error}")
-            raise Exception(resp.error)
+        # if resp.error:
+        #     logger.error(f"Supabase bulk vector insert failed: {resp.error}")
+        #     raise Exception(resp.error)
 
-        logger.info(f"Inserted {len(vector_rows)} embeddings for source_id={source_id}")
+        logger.info(f"Bulk inserted {len(vector_rows)} embeddings into public.document_vector_store for source_id={source_id}")
 
     except Exception as e:
         logger.error(f"Failed chunk/embed for {pdf_url}: {e}", exc_info=True)
