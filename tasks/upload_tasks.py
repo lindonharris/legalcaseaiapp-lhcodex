@@ -785,15 +785,13 @@ def finalize_document_processing_workflow(self, results, source_ids=None):
                                         .in_("id", source_ids) \
                                         .execute()
                                         
-            # Get the count of vectors created
+            # Get the count of vector embeddings created for document (source_id)
             vectors_data = (
                 supabase_client
                 .table("document_vector_store")
-                # or just the ID field: "id"
-                # Corrected line: count flag goes here in select()
-                .select("*", count="exact")
+                .select("*", count="exact")  # count flag goes in select() method
                 .in_("source_id", source_ids)
-                .execute() # No count argument here
+                .execute()  # no count parameter here
             )
             # Get vector count
             vector_count = vectors_data.count if hasattr(vectors_data, 'count') else 0
