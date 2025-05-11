@@ -43,6 +43,318 @@ def process_pdf_task(self, files, metadata=None):
         1) upload PDFs to S3, 
         2) save to Supabase, 
         3) and trigger vector embedding tasks.
+    Includes enhanced status tracking.
+    """
+    try:
+        # Initialize task-level state that will be accessible via AsyncResult.info
+        self.update_state(
+            state='PROCESSING',
+            meta={
+                'start_time': datetime.now(timezone.utc).isoformat(),
+                'total_files': len(files),
+                'processed_files': 0,
+                'stage': 'INITIALIZING',
+                'message': 'Starting document processing workflow'
+            }
+        )
+
+        # === RENDER RESOURCE LOGGING (MB) === #
+        process = psutil.Process(os.getpid())
+        mem_before = process.memory_info().rss
+        logger.info(f"Starting {self.name} with {len(files)} files and metadata: {metadata}")
+        logger.info(f"Memory usage before task: {mem_before / (1024 * 1024)} MB")
+
+        if not files:
+            logger.warning("No files provided for processing.")
+            self.update_state(
+                state='FAILURE',
+                meta={
+                    'error': "No files provided",
+                    'message': "Please upload at least one PDF file before processing."
+                }
+            )
+            return {"error": "Please upload at least one PDF file before processing."}
+        
+        rows_to_insert = []
+        temp_paths = []  # keep track of temps for cleanup
+        successful_files = 0
+        failed_files = 0
+
+        # === 1) Download & upload each file ===
+        self.update_state(
+            state='PROCESSING',
+            meta={
+                'stage': 'DOWNLOADING_AND_UPLOADING',
+                'message': f'Downloading and uploading {len(files)} files to S3',
+                'processed_files': 0,
+                'total_files': len(files)
+            }
+        )
+
+        for idx, file in enumerate(files):
+            try:
+                # download or read locally
+                if file.lower().startswith(("http://", "https://")):
+                    self.update_state(
+                        state='PROCESSING',
+                        meta={
+                            'stage': 'DOWNLOADING',
+                            'current_file': file.split('/')[-1],
+                            'current_file_index': idx + 1,
+                            'total_files': len(files),
+                            'message': f'Downloading file {idx + 1}/{len(files)}'
+                        }
+                    )
+                    resp = requests.get(file)
+                    resp.raise_for_status()
+                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+                    tmp.write(resp.content)
+                    tmp.close()
+                    file_path = tmp.name
+                else:
+                    file_path = file
+
+                # upload to S3
+                self.update_state(
+                    state='PROCESSING',
+                    meta={
+                        'stage': 'UPLOADING_TO_S3',
+                        'current_file': file.split('/')[-1],
+                        'current_file_index': idx + 1,
+                        'total_files': len(files),
+                        'message': f'Uploading file {idx + 1}/{len(files)} to S3'
+                    }
+                )
+                ext = os.path.splitext(file_path)[1]
+                key = f"{uuid.uuid4()}{ext}"
+                upload_to_s3(s3_client, file_path, key)
+
+                # get CloudFront URL
+                url = get_cloudfront_url(key)
+
+                rows_to_insert.append({
+                    "cdn_url": url,
+                    "project_id": str(metadata["project_id"]),
+                    "content_tags": ["Fitness", "Health", "Wearables"],
+                    "uploaded_by": str(metadata["user_id"]), 
+                    "vector_embed_status": "INITIALIZING",  # New initial status
+                    "filename": file.split('/')[-1],  # Store original filename
+                    "file_size_bytes": os.path.getsize(file_path),  # Store file size for reference
+                    "upload_timestamp": datetime.now(timezone.utc).isoformat()
+                })
+                temp_paths.append(file_path)
+                successful_files += 1
+
+                logger.info(f"Prepared upload row for {file_path} → {url}")
+
+            except Exception as e:
+                failed_files += 1
+                logger.error(f"[file loop] Failed processing '{file}': {e}", exc_info=True)
+                # Update the task state with error information
+                self.update_state(
+                    state='PROCESSING',
+                    meta={
+                        'stage': 'FILE_PROCESSING_ERROR',
+                        'current_file': file.split('/')[-1] if '/' in file else file,
+                        'error_message': str(e),
+                        'successful_files': successful_files,
+                        'failed_files': failed_files,
+                        'message': f'Error processing file {idx + 1}/{len(files)}: {str(e)[:100]}...'
+                    }
+                )
+                # skip this file and continue
+                continue
+
+        if not rows_to_insert:
+            logger.error("No successful uploads; aborting task.")
+            self.update_state(
+                state='FAILURE',
+                meta={
+                    'error': "All initial file processing/uploads failed.",
+                    'successful_files': 0,
+                    'failed_files': len(files),
+                    'message': "All file uploads failed"
+                }
+            )
+            raise RuntimeError("All file uploads failed.")
+
+        # === 2) Bulk insert into Supabase ===
+        self.update_state(
+            state='PROCESSING',
+            meta={
+                'stage': 'DATABASE_INSERTION',
+                'message': f'Inserting {len(rows_to_insert)} document records into database',
+                'successful_files': successful_files,
+                'failed_files': failed_files
+            }
+        )
+        
+        source_ids = []  # Initialize source_ids list
+        try:
+            # First, insert with INITIALIZING status
+            response = supabase_client.table("document_sources") \
+                                .insert(rows_to_insert) \
+                                .execute()
+            
+            # Extract source_ids from the insert response
+            source_ids = [r["id"] for r in response.data]
+            
+            # Update status to PENDING for embedding
+            self.update_state(
+                state='PROCESSING',
+                meta={
+                    'stage': 'UPDATING_STATUS',
+                    'message': f'Setting {len(source_ids)} documents to PENDING status',
+                    'successful_files': successful_files,
+                    'failed_files': failed_files,
+                    'source_ids': source_ids  # Include source_ids in state for reference
+                }
+            )
+            
+            # Update all document statuses to PENDING
+            update_payload = [{"id": sid, "vector_embed_status": "PENDING"} for sid in source_ids]
+            update_resp = supabase_client.table("document_sources") \
+                                .upsert(update_payload) \
+                                .execute()
+
+        except Exception as e:
+            logger.error(f"[Supabase] Bulk insert failed: {e}", exc_info=True)
+            # Cleanup temp files before re-raising the exception for Celery retry
+            for p in temp_paths:
+                try: 
+                    os.unlink(p)
+                    logger.debug(f"Deleted temp file {p} after Supabase insert failure.")
+                except: 
+                    logger.warning(f"[CELERY] Could not delete temp file {p} during Supabase failure cleanup.", exc_info=True)
+            
+            # Update task state
+            self.update_state(
+                state='FAILURE',
+                meta={
+                    'error': f"Initial DB insert failed: {str(e)}",
+                    'stage': 'DATABASE_ERROR',
+                    'message': f'Database insertion failed: {str(e)[:100]}...'
+                }
+            )
+            raise
+
+        # === 3) Cleanup temp files ===
+        self.update_state(
+            state='PROCESSING',
+            meta={
+                'stage': 'CLEANUP',
+                'message': 'Cleaning up temporary files',
+                'successful_files': successful_files,
+                'failed_files': failed_files,
+                'source_ids': source_ids
+            }
+        )
+        
+        for path in temp_paths:
+            try:
+                os.unlink(path)
+                logger.debug(f"Deleted temp file {path}")
+            except Exception:
+                logger.warning(f"[CELERY] Could not delete temp file {path}", exc_info=True)
+
+        # === 4) Kick off the Chord (Embedding Tasks + Final Callback) ===
+        self.update_state(
+            state='PROCESSING',
+            meta={
+                'stage': 'INITIATING_EMBEDDING',
+                'message': f'Starting embedding tasks for {len(source_ids)} documents',
+                'successful_files': successful_files,
+                'failed_files': failed_files,
+                'source_ids': source_ids
+            }
+        )
+        
+        # Create a list of task signatures for the chord header
+        embedding_tasks = [
+            chunk_and_embed_task.s(
+                row["cdn_url"],                 # Pass the CDN URL
+                sid,                            # Pass the source_id from the DB insert
+                metadata["project_id"]          # Pass the project_id
+            )
+            for sid, row in zip(source_ids, rows_to_insert)
+        ]
+
+        # Define the chord body (the callback task)
+        callback_task = finalize_document_processing_workflow.s(source_ids)
+
+        # Create the chord: group of embedding tasks followed by the callback
+        document_processing_chord = chord(embedding_tasks)(callback_task)
+
+        # Launch the chord
+        logger.info(f"Launching chord with {len(embedding_tasks)} embedding tasks and callback.")
+        document_processing_chord.delay()
+
+        # The final success log will be in the finalize_document_processing_workflow task.
+        logger.info(f"{self.name} launched chord for source_ids: {source_ids}. Task is now complete.")
+        
+        # Update final state with success and result information
+        self.update_state(
+            state='SUCCESS',
+            meta={
+                'stage': 'COMPLETED',
+                'message': 'Document upload complete, embedding in progress',
+                'successful_files': successful_files,
+                'failed_files': failed_files,
+                'source_ids': source_ids
+            }
+        )
+
+        # Return source_ids and task information
+        return {
+            "source_ids": source_ids,
+            "successful_uploads": successful_files,
+            "failed_uploads": failed_files,
+            "total_files": len(files)
+        }
+    
+    except Exception as e:
+        # this catches anything that bubbled out of your inner logic
+        logger.error(f"Overall process_pdf_task failed: {e}", exc_info=True)
+
+        try:
+            # Update state before retry
+            self.update_state(
+                state='RETRY',
+                meta={
+                    'error': str(e),
+                    'retry_count': self.request.retries,
+                    'max_retries': self.max_retries,
+                    'message': f'Task failed, attempting retry {self.request.retries + 1}/{self.max_retries + 1}'
+                }
+            )
+            # schedule a retry if we haven't hit max_retries yet
+            raise self.retry(exc=e)
+        except MaxRetriesExceededError:
+            # once retries are exhausted, raise a clear runtime error
+            logger.critical(
+                f"[CELERY] process_pdf_task failed permanently after {self.max_retries} retries: {e}"
+            )
+            # Update final failure state 
+            self.update_state(
+                state='FAILURE',
+                meta={
+                    'error': str(e),
+                    'retry_count': self.max_retries,
+                    'max_retries': self.max_retries,
+                    'message': f'Task failed after {self.max_retries} retries'
+                }
+            )
+            raise RuntimeError(
+                f"[CELERY] process_pdf_task failed permanently after {self.max_retries} retries: {e}"
+            ) from e
+
+@celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
+def process_pdf_task_05112025(self, files, metadata=None):
+    """
+    Main Celery task to:
+        1) upload PDFs to S3, 
+        2) save to Supabase, 
+        3) and trigger vector embedding tasks.
     Typically used to upload documents for creation of a new "RAG project"
 
     Args:
@@ -196,7 +508,7 @@ def process_pdf_task(self, files, metadata=None):
             ) from e
 
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
-def process_pdf_task_not_chord(self, files, metadata=None):
+def process_pdf_task_no_chord(self, files, metadata=None):
     """
     Main Celery task to:
         1) upload PDFs to S3, 
@@ -461,6 +773,76 @@ def chunk_and_embed_task(self, pdf_url, source_id, project_id, chunk_size=1000, 
 
 @celery_app.task(bind=True)
 def finalize_document_processing_workflow(self, results, source_ids=None):
+    """
+    Celery task that runs after all chunk_and_embed_task tasks in a chord complete.
+    Enhanced with detailed reporting.
+    """
+    try:
+        logger.info(f"All embedding tasks in the workflow have completed.")
+        
+        # Calculate statistics about the completed workflow
+        completed_tasks = len(results) if isinstance(results, list) else 0
+        source_count = len(source_ids) if source_ids else 0
+        
+        # Query the database to get final statistics
+        if source_ids:
+            # Get the status of all sources
+            sources_data = supabase_client.table("document_sources") \
+                                        .select("id, vector_embed_status") \
+                                        .in_("id", source_ids) \
+                                        .execute()
+                                        
+            # Get the count of vectors created
+            vectors_data = supabase_client.table("document_vector_store") \
+                                        .select("count", count_option="exact") \
+                                        .in_("source_id", source_ids) \
+                                        .execute()
+                                        
+            # Process status counts
+            sources = sources_data.data if hasattr(sources_data, 'data') else []
+            status_counts = {}
+            for source in sources:
+                status = source.get("vector_embed_status", "UNKNOWN")
+                status_counts[status] = status_counts.get(status, 0) + 1
+                
+            # Get vector count
+            vector_count = vectors_data.count if hasattr(vectors_data, 'count') else 0
+            
+            # Log detailed completion information
+            logger.info(
+                f"Document processing workflow completed with:\n"
+                f"- Sources: {source_count}\n"
+                f"- Status counts: {status_counts}\n"
+                f"- Total vectors: {vector_count}"
+            )
+            
+            # Update a workflow status record if needed
+            # This could be useful for tracking overall workflow status in a separate table
+            # if you want to implement that
+        
+        # Log the final success message
+        logger.info(f"Document processing workflow completed successfully.")
+        
+        return {
+            "status": "COMPLETE",
+            "source_count": source_count,
+            "source_ids": source_ids,
+            "vector_count": vector_count if 'vector_count' in locals() else None,
+            "status_counts": status_counts if 'status_counts' in locals() else None,
+            "completion_time": datetime.now(timezone.utc).isoformat()
+        }
+    
+    except Exception as e:
+        logger.error(f"Error in finalize_document_processing_workflow: {e}", exc_info=True)
+        return {
+            "status": "ERROR",
+            "error": str(e),
+            "source_ids": source_ids,
+            "error_time": datetime.now(timezone.utc).isoformat()
+        }
+
+@celery_app.task(bind=True)
+def finalize_document_processing_workflow_05112025(self, results, source_ids=None):
     """
     Celery task that runs after all chunk_and_embed_task tasks in a chord complete.
     Logs the final success message for the entire workflow.
