@@ -789,9 +789,11 @@ def finalize_document_processing_workflow(self, results, source_ids=None):
             vectors_data = (
                 supabase_client
                 .table("document_vector_store")
-                .select("*")                   # or just the ID field: "id"
+                # or just the ID field: "id"
+                # Corrected line: count flag goes here in select()
+                .select("*", count="exact")
                 .in_("source_id", source_ids)
-                .execute(count="exact")        # count flag goes here
+                .execute() # No count argument here
             )
             # Get vector count
             vector_count = vectors_data.count if hasattr(vectors_data, 'count') else 0
