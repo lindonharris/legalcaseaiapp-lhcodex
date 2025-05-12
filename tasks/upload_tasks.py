@@ -12,6 +12,7 @@ import json
 import psutil
 import requests
 import tempfile
+from typing import List
 from tasks.note_tasks import rag_note_task 
 from tasks.celery_app import celery_app  # Import the Celery app instance (see celery_app.py for LocalHost config)
 from utils.audio_utils import generate_audio, generate_only_dialogue_text
@@ -315,8 +316,8 @@ def process_pdf_task(self, files, metadata=None):
             str(metadata["user_id"]),
             source_ids,
             str(metadata["project_id"]),
-            str(metadata["note_type"]),     # flag to determine if this is just RAG embedding or... RAG Embedding + note genereation
-            str(metadata["model_type"])       
+            str(metadata["note_type"], "None"),     # flag to determine if this is just RAG embedding or... RAG Embedding + note genereation (default: no note generation)
+            str(metadata["model_type", "gpt-4o-mini"])   # (default: gpt4o-mini)    
         )
         chord_result = chord(embedding_tasks)(callback)
         workflow_id = chord_result.id
@@ -785,12 +786,12 @@ def chunk_and_embed_task(self, pdf_url, source_id, project_id, chunk_size=1000, 
 @celery_app.task(bind=True)
 def finalize_document_processing_workflow(
     self, 
-    user_id, 
-    results, 
-    project_id, 
-    note_type, 
-    model_type,
-    source_ids=None
+    results,    # ← Celery chord auto injects the list of chunk_and_embed_task results
+    user_id: str, 
+    source_ids: List[str],
+    project_id: str,
+    note_type: str,
+    model_type: str
 ):
     """
     Celery callback after all chunk_and_embed_task tasks in a chord complete.
@@ -810,7 +811,7 @@ def finalize_document_processing_workflow(
                                         .select("id, vector_embed_status") \
                                         .in_("id", source_ids) \
                                         .execute()
-                                        
+
             # Get the count of vector embeddings created for document (source_id)
             vectors_data = (
                 supabase_client
