@@ -108,7 +108,7 @@ def insert_note_supabase_record(
             "user_id": user_id,
             "project_id": project_id,
             "note_type": note_type,
-            "content_markdown": note_content,
+            "content_markdown": content_markdown,
             "created_at": created_at,
             "is_sharable": is_sharable
         }).execute()
