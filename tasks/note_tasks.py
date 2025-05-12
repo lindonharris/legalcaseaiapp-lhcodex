@@ -127,7 +127,7 @@ def rag_note_task(
             project_id,
             user_id, 
             note_type, 
-            answer=full_answer      # full rag reponse
+            content=full_answer      # full rag reponse
         )
 
         # Return nothing
@@ -193,7 +193,12 @@ def create_new_conversation(user_id, project_id):
     response = supabase_client.table("chat_session").insert(new_chat_session).execute()
     return response.data[0]["id"]
 
-def save_note(project_id, user_id, note_type, answer):
+def save_note(
+        project_id, 
+        user_id, 
+        note_type, 
+        content
+    ):
     """
     Persists generated summary note into Supabase public.notes table.
     """
@@ -202,8 +207,8 @@ def save_note(project_id, user_id, note_type, answer):
         table_name="notes",
         user_id=user_id,
         project_id=project_id,
-        content_markdown=answer,
-        type=note_type,
+        content_markdown=content,
+        note_type=note_type,
         is_sharable=False,
         created_at=datetime.now(timezone.utc).isoformat()
     )
