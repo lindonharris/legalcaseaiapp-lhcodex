@@ -86,16 +86,8 @@ class PDFRequest(BaseModel):
     files: List[str]  # List of URLs or file paths of the PDFs
     metadata: Dict[str, Any]  # A dictionary for any metadata information
 
-# <---- Models for new RAG pipeline kickoff  ----> #
-class NewRagPipelineRequest(BaseModel):
-    ''' 
-    Pydantic struct for kick off of a new RAG project
-    Files → S3/CF upload → Vector embedding
-    '''
-    files: List[str]  # List of URLs or file paths of the PDFs
-    metadata: Dict[str, Any]  # A dictionary for any metadata information
-
-class NewRagPipelineResponse(BaseModel):
+# Pydantic model for the response
+class PDFResponse(BaseModel):
     '''
     Response for the `` endpoint
     Format (seen in PostMan):
@@ -103,11 +95,31 @@ class NewRagPipelineResponse(BaseModel):
         "embedding_task_id": "some_task_id"
     }
     '''
+    audio_task_id: str
+    embedding_task_id: str
+
+# <---- Models for new RAG pipeline kickoff  ----> #
+class NewRagPipelineRequest(BaseModel):
+    ''' 
+    Pydantic struct for `POST/new-rag-project/` to kick off of a new RAG project
+    Files → S3/CF upload → Vector embedding
+    '''
+    files: List[str]  # List of URLs or file paths of the PDFs
+    metadata: Dict[str, Any]  # A dictionary for any metadata information
+
+class NewRagPipelineResponse(BaseModel):
+    '''
+    Response for the `POST/new-rag-project/` endpoint
+    Format (seen in PostMan):
+    {
+        "embedding_task_id": "some_task_id"
+    }
+    '''
     embedding_task_id: str      # from vector embedding task
 
-# <---- Models for new RAG pipeline nested task staus checking ----> #
+# <---- Models for new RAG pipeline nested Celery task staus checking ----> #
 class EmbeddingStatusRequest(BaseModel):
-    ''' Pydantic struct for checking on chunk & embed task for a new RAG project '''
+    ''' Pydantic struct for `POST/embedding-pipeline-task-status` request checking on chunk & embed task for a new RAG project '''
     source_ids: List[str]  # List of uuids of documents being processed for RAG
 
 class DocumentStatus(BaseModel):
@@ -117,7 +129,7 @@ class DocumentStatus(BaseModel):
 
 class EmbeddingStatusResponse(BaseModel):
     '''
-    Response body for
+    Response body for `POST/embedding-pipeline-task-status` status checker
     Format (seen in PostMan):
     {
         "status": "WORKFLOW_IN_PROGRESS",
@@ -129,9 +141,6 @@ class EmbeddingStatusResponse(BaseModel):
     message: str
     document_statuses: List[DocumentStatus]
 
-# New RAG pipeline response model
-
-
 # Chained RAG pipeline response model
 class NewRagAndNoteResponse(BaseModel):
     workflow_id: str             # the chain’s overall task ID
@@ -140,13 +149,11 @@ class SourceIdsRequest(BaseModel):
     """Request body model for the status endpoint for checking the RAG pipeline upload."""
     source_ids: List[str]
 
-# Pydantic model for the response
-class PDFResponse(BaseModel):
-    audio_task_id: str
-    embedding_task_id: str
-
-# RAG Query pydantic model
-class RagQueryRequest(BaseModel):
+# <---- Models for AI Chatbot assistant (with RAG) ----> #
+class RagQueryRequest(BaseModel):  
+    '''
+    Pydantic request model for for `POST/rag-chat/` endpoiont
+    '''
     user_id: str
     chat_session_id: str
     query: str
@@ -154,6 +161,20 @@ class RagQueryRequest(BaseModel):
     project_id: str
     model_type: str
 
+class RagQueryResponse(BaseModel):  
+    '''
+    Response body for `POST/rag-chat/` status checker
+    Format (seen in PostMan):
+    {
+        ...
+    }
+    '''
+    user_id: str
+    chat_session_id: str
+    query: str
+    # document_ids: List[str]
+    project_id: str
+    model_type: str
 
 # ================================================ #
 #                  WEBSOCKETS
