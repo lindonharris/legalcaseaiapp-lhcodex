@@ -106,7 +106,7 @@ def rag_note_task(
         embedding_model = OpenAIEmbeddings(
             model="text-embedding-ada-002",
             api_key=OPENAI_API_KEY)
-        embeddings = embedding_model.embed_documents(texts)
+        query_embedding = embedding_model.embed_query(query)
 
         # Step 2) Fetch top-K relevant chunks via Supabase RPC
         relevant_chunks = fetch_relevant_chunks(query_embedding, project_id)
