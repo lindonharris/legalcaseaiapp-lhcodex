@@ -89,7 +89,7 @@ def get_chat_llm(
 def rag_note_task(
     self, 
     user_id, 
-    query, 
+    note_type,          # ← note_type here
     project_id, 
     model_type
 ):
@@ -104,7 +104,8 @@ def rag_note_task(
         # Set explicit start time metadata
         self.update_state(state="PENDING", meta={"start_time": datetime.now(timezone.utc).isoformat()})
 
-        note_type="Case Summary"
+        if note_type == "outline":
+            query = "Create a comprehensive oputline of the following documents"
 
         # Step 1) Embed the query using OpenAI Ada embeddings (1536 dims)
         embedding_model = OpenAIEmbeddings(
