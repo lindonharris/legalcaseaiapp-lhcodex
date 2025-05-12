@@ -67,7 +67,10 @@ class StreamToClientHandler(BaseCallbackHandler):
         # Called by LangChain for every new token in streaming mode
         publish_token(self.session_id, token)
 
-def get_chat_llm(model_name: str = "gpt-4o-mini", callback_manager: CallbackManager = None) -> ChatOpenAI:
+def get_chat_llm(
+        model_name: str = "gpt-4o-mini", 
+        callback_manager: CallbackManager = None
+) -> ChatOpenAI:
     """
     Factory to create a ChatOpenAI instance.
     If callback_manager is provided, enable streaming and attach handlers.
@@ -76,6 +79,7 @@ def get_chat_llm(model_name: str = "gpt-4o-mini", callback_manager: CallbackMana
     """
     return ChatOpenAI(
         model=model_name,
+        api_key=OPENAI_API_KEY,           # ← supply your key here
         temperature=0.7,
         streaming=False,                            # Disable streaming if callbacks exist
         callback_manager=None                       # attaches our StreamToClientHandler
