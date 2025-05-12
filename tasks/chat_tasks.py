@@ -82,8 +82,8 @@ def rag_chat_task(self, user_id, chat_session_id, query, project_id, model_type)
     1. Ensure a chat session exists
     2. Embed the user query
     3. Retrieve relevant document chunks
-    4. Stream LLM response tokens to client and collect full answer
-    5. Persist query and answer in Supabase
+    4. Publish LLM response to redis topic `chat_result`
+    5. Persist query and answer in Supabase public.messages table
     """
     try:
         # Set explicit start time metadata

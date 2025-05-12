@@ -166,7 +166,12 @@ class RagQueryResponse(BaseModel):
     Response body for `POST/rag-chat/` status checker
     Format (seen in PostMan):
     {
-        ...
+        "user_id",
+        "chat_session_id",
+        "query",
+        "project_id",
+        "model_type"
+
     }
     '''
     user_id: str
