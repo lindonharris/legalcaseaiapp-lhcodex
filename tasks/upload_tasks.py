@@ -873,6 +873,7 @@ def finalize_document_processing_workflow(
             "source_ids": source_ids,
             "vector_count": vector_count if 'vector_count' in locals() else None,
             "status_counts": status_counts if 'status_counts' in locals() else None,
+            "note_type": note_type,
             "completion_time": datetime.now(timezone.utc).isoformat()
         }
     
