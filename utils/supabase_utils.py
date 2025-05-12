@@ -99,7 +99,7 @@ def insert_note_supabase_record(
         project_id, 
         content_markdown, 
         note_type, 
-        is_sharable, 
+        is_shareable, 
         created_at
 ):
     '''INSERT into table public.messages'''
@@ -110,7 +110,7 @@ def insert_note_supabase_record(
             "note_type": note_type,
             "content_markdown": content_markdown,
             "created_at": created_at,
-            "is_sharable": is_sharable
+            "is_shareable": is_shareable
         }).execute()
     except Exception as e:
         raise Exception(f"Error saving messages: {e}")
