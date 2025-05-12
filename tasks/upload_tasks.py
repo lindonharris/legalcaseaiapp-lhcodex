@@ -313,11 +313,11 @@ def process_pdf_task(self, files, metadata=None):
 
         # Define the chord body (the callback task)
         callback = finalize_document_processing_workflow.s(
-            str(metadata["user_id"]),
+            metadata["user_id"],
             source_ids,
-            str(metadata["project_id"]),
-            str(metadata["note_type"], "None"),     # flag to determine if this is just RAG embedding or... RAG Embedding + note genereation (default: no note generation)
-            str(metadata["model_type", "gpt-4o-mini"])   # (default: gpt4o-mini)    
+            metadata["project_id"],
+            metadata.get("note_type", "None"),          # default to "None" if missing
+            metadata.get("model_type", "gpt-4o-mini")   # default to gpt-4o-mini  
         )
         chord_result = chord(embedding_tasks)(callback)
         workflow_id = chord_result.id
@@ -786,7 +786,7 @@ def chunk_and_embed_task(self, pdf_url, source_id, project_id, chunk_size=1000, 
 @celery_app.task(bind=True)
 def finalize_document_processing_workflow(
     self, 
-    results,    # ← Celery chord auto injects the list of chunk_and_embed_task results
+    results,    # ← Celery chord injects the list of chunk_and_embed_task results
     user_id: str, 
     source_ids: List[str],
     project_id: str,
