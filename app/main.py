@@ -53,8 +53,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ======== PYDANTIC MODELS ======== #
-
+# ======== PYDANTIC MODELS TEST ======== #
 class Numbers(BaseModel):
     x: int
     y: int
@@ -63,11 +62,18 @@ class Numbers(BaseModel):
 class SumResponse(BaseModel):
     sum: int
 
+# [SANITY CHECK] Request model for addition sanity
+class AdditionRequest(BaseModel):
+    x: int
+    y: int
+
 class PDFCaptureResponse(BaseModel):
     uuid: str
     url: str
 
-# Define Pydantic model for the PDF extraction response
+# ======== PYDANTIC MODELS PROD ======== #
+
+# <---- Define Pydantic model for the PDF extraction response ----> #
 class PDFExtractResponse(BaseModel):
     filename: str
     combined_text: str
@@ -75,39 +81,56 @@ class PDFExtractResponse(BaseModel):
 class PDFExtractBatchResponse(BaseModel):
     results: List[PDFExtractResponse]
 
-# [SANITY CHECK] Request model for addition sanity
-class AdditionRequest(BaseModel):
-    x: int
-    y: int
-
-# Pydantic model for the request body
 class PDFRequest(BaseModel):
     ''' WeWeb specific pydantic struct '''
     files: List[str]  # List of URLs or file paths of the PDFs
     metadata: Dict[str, Any]  # A dictionary for any metadata information
 
-# New RAG pipeline request model
+# <---- Models for new RAG pipeline kickoff  ----> #
 class NewRagPipelineRequest(BaseModel):
-    ''' WeWeb specific pydantic struct for creation of a new RAG project '''
+    ''' 
+    Pydantic struct for kick off of a new RAG project
+    Files → S3/CF upload → Vector embedding
+    '''
     files: List[str]  # List of URLs or file paths of the PDFs
     metadata: Dict[str, Any]  # A dictionary for any metadata information
 
+class NewRagPipelineResponse(BaseModel):
+    '''
+    Response for the `` endpoint
+    Format (seen in PostMan):
+    {
+        "embedding_task_id": "some_task_id"
+    }
+    '''
+    embedding_task_id: str      # from vector embedding task
+
+# <---- Models for new RAG pipeline nested task staus checking ----> #
 class EmbeddingStatusRequest(BaseModel):
     ''' Pydantic struct for checking on chunk & embed task for a new RAG project '''
     source_ids: List[str]  # List of uuids of documents being processed for RAG
 
 class DocumentStatus(BaseModel):
+    '''Helper struct for `POST/embedding-pipeline-task-status` endpoint '''
     id: str
     status: str
 
 class EmbeddingStatusResponse(BaseModel):
+    '''
+    Response body for
+    Format (seen in PostMan):
+    {
+        "status": "WORKFLOW_IN_PROGRESS",
+        "message": "some message...",
+        "document_statuses": ["COMPLETE", "PENDING"]
+    }
+    '''
     status: Literal["WORKFLOW_IN_PROGRESS","WORKFLOW_COMPLETE","WORKFLOW_ERROR"]
     message: str
     document_statuses: List[DocumentStatus]
 
 # New RAG pipeline response model
-class NewRagPipelineResponse(BaseModel):
-    embedding_task_id: str      # from vector embedding task
+
 
 # Chained RAG pipeline response model
 class NewRagAndNoteResponse(BaseModel):
@@ -236,7 +259,7 @@ async def create_new_rag_project(
             user_id: UUID
             project_id: UUID
             model_type: string (optional) 
-            quick_action: string
+            note_type: string
         }
     '''
     try:
@@ -308,57 +331,6 @@ async def create_new_rag_project_and_gen_notes(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
-# @app.post("/new-rag-project-deprecated/", response_model=NewRagPipelineResponse)
-# async def create_new_rag_project_DEPR(request: NewRagPipelineRequest, background_tasks: BackgroundTasks):
-#     '''
-#     @INVESTIGATE: Should i use this to kill 2 birds with one stone? Using chords
-#     Endpoint to create both a RAG pipeline for AI notes in one call:
-#         - process_pdf_task:
-#             input: request.files, request.metadata
-#             returns: source_ids
-#         - process_pdf_task:
-#             input: source_ids
-#             returns: None
-        
-#     Request contains
-#     project_id
-#         request.files (List): list of pdf file links
-#         request.metadata (json): {
-#             project_id:
-#         }
-#     '''
-#     try:
-
-#         # Create signatures for the tasks
-#         process_pdf_task_signature = process_pdf_task.s(request.files, request.metadata)        # Upload PDFs to AWS S3, and Supabase
-#         # validate_and_generate_audio_task_signature = validate_and_generate_audio_task.s(request.files, request.metadata)
-
-#         # Create the group
-#         task_group = group(
-#             process_pdf_task_signature,
-#             # validate_and_generate_audio_task_signature
-#         )
-
-#         # Create the chord with the group and callback
-#         task_chord = chord(task_group)(insert_project_documents_task.s())
-
-#         # The result of the chord is the AsyncResult of the callback task
-#         chord_result = task_chord
-
-#         # Get task IDs
-#         process_pdf_task_id = chord_result.parent.results[0].id
-#         # validate_and_generate_audio_task_id = chord_result.parent.results[1].id
-#         insert_task_id = chord_result.id
-
-#         # Return the task IDs to the client
-#         return {
-#             # "audio_task_id": validate_and_generate_audio_task_id,
-#             "embedding_task_id": process_pdf_task_id,
-#             "insert_task_id": insert_task_id,
-#         }
-#     except Exception as e:
-#         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/add-to-rag-project/", response_model=NewRagPipelineResponse)
 async def append_sources_to_project(request: NewRagPipelineRequest, background_tasks: BackgroundTasks):
