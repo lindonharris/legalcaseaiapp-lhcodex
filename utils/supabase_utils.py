@@ -18,17 +18,28 @@ supabase_client: Client = create_client(
 # Init logger
 logger = logging.getLogger(__name__)
 
+def create_new_chat_session(client, table_name, cdn_url, project_id):
+    '''INSERT/CREATE a new chat_session object table public.chat_sessions'''
+    try:
+        response = client.table(table_name).insert({
+            "user_id": user_id,
+            "project_id": project_id,
+            "created_at": created_at,
+        }).execute()
+    except Exception as e:
+        raise Exception(f"Error saving to public.chat_sessions: {e}")
+
 def insert_mp3_supabase_record(
-        client, 
-        table_name, 
-        podcast_title, 
-        cdn_url, 
-        transcript,
-        content_tags,
-        uploaded_by, 
-        is_public,
-        is_playlist
-    ):
+    client, 
+    table_name, 
+    podcast_title, 
+    cdn_url, 
+    transcript,
+    content_tags,
+    uploaded_by, 
+    is_public,
+    is_playlist,
+):
     """Inserts a record into the Supabase Library table."""
     try:
         data = {
@@ -91,16 +102,15 @@ def insert_vector_supabase_record(client, table_name, source_id, project_id, con
     except Exception as e:
         raise Exception(f"Failed to insert into Supabase vector-store: {e}")
 
-
 def insert_note_supabase_record(
-        client, 
-        table_name, 
-        user_id, 
-        project_id, 
-        content_markdown, 
-        note_type, 
-        is_shareable, 
-        created_at
+    client, 
+    table_name, 
+    user_id, 
+    project_id, 
+    content_markdown, 
+    note_type, 
+    is_shareable, 
+    created_at,
 ):
     '''INSERT note into table public.note'''
     try:
@@ -113,17 +123,17 @@ def insert_note_supabase_record(
             "is_shareable": is_shareable
         }).execute()
     except Exception as e:
-        raise Exception(f"Error saving messages: {e}")
+        raise Exception(f"Error saving to public.note: {e}")
 
 def insert_chat_message_supabase_record(
-        client, 
-        table_name, 
-        user_id, 
-        chat_session_id, 
-        dialogue_role, 
-        message_content, 
-        query_response_status,
-        created_at
+    client, 
+    table_name, 
+    user_id, 
+    chat_session_id, 
+    dialogue_role, 
+    message_content, 
+    query_response_status,
+    created_at,
 ):
     '''INSERT message into table public.messages'''
     try:
@@ -138,4 +148,4 @@ def insert_chat_message_supabase_record(
         }).execute()
         return response
     except Exception as e:
-        raise Exception(f"Error saving messages: {e}")
+        raise Exception(f"Error saving to public.messages: {e}")

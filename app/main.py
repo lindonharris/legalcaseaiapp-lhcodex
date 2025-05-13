@@ -464,8 +464,8 @@ async def rag_chat(request: RagQueryRequest):
                 request.project_id,
                 request.model_type
             ),
-            # the return value of persist_user_query (the new message_id)
-            # will be passed as the first arg to rag_chat_task
+            # the return value of persist_user_query (i.e. message_id) ...
+            # will be passed as the FIRST arg to rag_chat_task
             rag_chat_task.s(
                 request.user_id,
                 request.chat_session_id,
