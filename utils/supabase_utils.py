@@ -136,5 +136,6 @@ def insert_chat_message_supabase_record(
             "raw_resposne": "",
             "created_at": created_at,
         }).execute()
+        return response
     except Exception as e:
         raise Exception(f"Error saving messages: {e}")

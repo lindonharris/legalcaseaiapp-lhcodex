@@ -76,9 +76,9 @@ def get_chat_llm(model_name: str = "gpt-4o-mini", callback_manager: CallbackMana
     )
 
 @celery_app.task(bind=True, base=BaseTaskWithRetry)
-def rag_chat_task(self, user_id, chat_session_id, query, project_id, model_type):
+def persist_user_query(self, user_id, chat_session_id, query, project_id, model_type):
     """
-    Simple task to persist user query to public.messages in Supabase
+    Simple task to persist user query to public.messages in Supabase before performing RAG Q&A
     """
     try:
         # Set explicit start time metadata
@@ -93,9 +93,9 @@ def rag_chat_task(self, user_id, chat_session_id, query, project_id, model_type)
         )
 
         # Step 1) Initialize or create conversation if needed
-        insert_chat_message_supabase_record(
+        response = insert_chat_message_supabase_record(
             supabase_client,
-            table_name="message",
+            table_name="messages",
             user_id=user_id,
             chat_session_id=chat_session_id,
             dialogue_role="user",
@@ -105,13 +105,16 @@ def rag_chat_task(self, user_id, chat_session_id, query, project_id, model_type)
         )
 
         # Return completed answer for HTTP response (unpacked in WeWeb)
+        inserted_id = response.data[0]["id"]
+        return inserted_id
+
+        # Return completed answer for HTTP response (unpacked in WeWeb)
         return {"answer": assistant_response, "message_role": "assistant"}
 
     except Exception as e:
         logger.error(f"RAG Chat Task failed: {e}", exc_info=True)
         # Retry on failure according to BaseTaskWithRetry policies
         raise self.retry(exc=e)
-
 
 @celery_app.task(bind=True, base=BaseTaskWithRetry)
 def rag_chat_task(self, user_id, chat_session_id, query, project_id, model_type):
@@ -154,6 +157,17 @@ def rag_chat_task(self, user_id, chat_session_id, query, project_id, model_type)
             model_name=model_type  # supports gpt-4o, gemini-flash, deepseek-v3, etc.
         )
 
+        # insert assistant response
+        insert_chat_message_supabase_record(
+            supabase_client,
+            table_name="messages",
+            user_id=user_id,
+            chat_session_id=chat_session_id,
+            dialogue_role="assistant",
+            message_content=answer,
+            query_response_status="",
+            created_at=datetime.now(timezone.utc).isoformat()
+        )
         # # Step 4) Publish final answer to Redis pub/sub, topic name "chat_result"
         # redis_sync.publish(f"chat_result:{chat_session_id}", json.dumps({
         #     "status": "SUCCESS",
@@ -161,13 +175,13 @@ def rag_chat_task(self, user_id, chat_session_id, query, project_id, model_type)
         #     "message": assistant_response
         # }))
 
-        # Step 5) Save entire conversation turn in DB
-        save_conversation(
-            chat_session_id, 
-            user_id, 
-            query, 
-            answer=assistant_response      # full rag reponse
-        )
+        # # Step 5) Save entire conversation turn in DB
+        # save_conversation(
+        #     chat_session_id, 
+        #     user_id, 
+        #     query, 
+        #     answer=assistant_response      # full rag reponse
+        # )
 
         # Return completed answer for HTTP response (unpacked in WeWeb)
         return {"answer": assistant_response, "message_role": "assistant"}
@@ -245,7 +259,7 @@ def save_conversation(chat_session_id, user_id, query, answer):
     # insert assistant response
     insert_chat_message_supabase_record(
         supabase_client,
-        table_name="message",
+        table_name="messages",
         user_id=user_id,
         chat_session_id=chat_session_id,
         dialogue_role="assistant",
