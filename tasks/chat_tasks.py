@@ -186,6 +186,7 @@ def save_conversation(chat_session_id, user_id, query, answer):
     """
     Persists user and assistant messages into Supabase public.messages table.
     """
+    # insert user query
     insert_conversation_supabase_record(
         supabase_client,
         table_name="message",
@@ -195,6 +196,7 @@ def save_conversation(chat_session_id, user_id, query, answer):
         message_content=query,
         created_at=datetime.now(timezone.utc).isoformat()
     )
+    # insert assistant response
     insert_conversation_supabase_record(
         supabase_client,
         table_name="message",
