@@ -115,13 +115,14 @@ def insert_note_supabase_record(
     except Exception as e:
         raise Exception(f"Error saving messages: {e}")
 
-def insert_conversation_supabase_record(
+def insert_chat_message_supabase_record(
         client, 
         table_name, 
         user_id, 
         chat_session_id, 
         dialogue_role, 
         message_content, 
+        query_response_status,
         created_at
 ):
     '''INSERT message into table public.messages'''
@@ -129,8 +130,9 @@ def insert_conversation_supabase_record(
         response = client.table(table_name).insert({
             "user_id": user_id,
             "chat_session_id": chat_session_id,
-            "role": dialogue_role,                  # enum(user, assistant)
+            "role": dialogue_role,                              # enum(user, assistant)
             "content": message_content,
+            "query_response_status": query_response_status,     # status for SUCCESS or FAILED llm query response
             "raw_resposne": "",
             "created_at": created_at,
         }).execute()
