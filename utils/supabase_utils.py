@@ -102,7 +102,7 @@ def insert_note_supabase_record(
         is_shareable, 
         created_at
 ):
-    '''INSERT into table public.messages'''
+    '''INSERT note into table public.note'''
     try:
         response = client.table(table_name).insert({
             "user_id": user_id,
@@ -115,14 +115,23 @@ def insert_note_supabase_record(
     except Exception as e:
         raise Exception(f"Error saving messages: {e}")
 
-def insert_conversation_supabase_record(client, table_name, user_id, chat_session_id, dialogue_role, message_content, created_at):
-    '''INSERT into table public.messages'''
+def insert_conversation_supabase_record(
+        client, 
+        table_name, 
+        user_id, 
+        chat_session_id, 
+        dialogue_role, 
+        message_content, 
+        created_at
+):
+    '''INSERT message into table public.messages'''
     try:
         response = client.table(table_name).insert({
             "user_id": user_id,
             "chat_session_id": chat_session_id,
-            "role": dialogue_role,
+            "role": dialogue_role,                  # enum(user, assistant)
             "content": message_content,
+            "raw_resposne": "",
             "created_at": created_at,
         }).execute()
     except Exception as e:
