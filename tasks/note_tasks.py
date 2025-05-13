@@ -1,6 +1,6 @@
 '''
-This file runs Celery tasks for handling RAG AI note creation tasks (non-streaming LLM responses)
-Handles RAG tasks without token streaming. Returns full answer in one go.
+This file runs Celery tasks for handling RAG AI note creation tasks (outlines, summaries, compare-contrast)
+Note genereation (with RAG) is done without token streaming. Returns full answer in one go.
 '''
 
 from celery import Celery, Task

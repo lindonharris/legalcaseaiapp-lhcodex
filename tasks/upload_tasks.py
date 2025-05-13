@@ -1,6 +1,5 @@
 """
-This file runs Celery tasks, place any logic that needs to run async 
-like api calls and calls to other services. 
+This file runs Celery tasks, for handling RAG document upload, and vector embedding tasks
 """
 
 from celery import Celery, chain, chord
