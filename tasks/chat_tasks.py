@@ -95,7 +95,7 @@ def new_chat_session(self, user_id, project_id):
 
         # Step 2) UPDATE public.projects, chat_session_id column
         try:
-            _ = client \
+            _ = supabase_client \
             .table("projects") \
             .update({"chat_session_id": new_chat_session_id}) \
             .eq("id", project_id) \
@@ -198,7 +198,7 @@ def rag_chat_task(
             user_id=user_id,
             chat_session_id=chat_session_id,
             dialogue_role="assistant",
-            message_content=answer,
+            message_content=assistant_response,
             query_response_status="COMPLETE",
             created_at=datetime.now(timezone.utc).isoformat()
         )
@@ -219,7 +219,7 @@ def rag_chat_task(
 
         # Step 5) UPDATE public.messages column ???????
         try:
-            _ = client \
+            _ = supabase_client \
             .table("messages") \
             .update({"query_response_status": "COMPLETE"}) \
             .eq("id", message_id) \
