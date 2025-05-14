@@ -9,7 +9,7 @@ import logging
 import os
 import redis
 from supabase import create_client, Client
-from utils.supabase_utils import insert_conversation_supabase_record, supabase_client
+from utils.supabase_utils import supabase_client, insert_chat_message_supabase_record, create_new_chat_session
 from datetime import datetime, timezone
 import requests
 import tempfile
@@ -76,55 +76,157 @@ def get_chat_llm(model_name: str = "gpt-4o-mini", callback_manager: CallbackMana
     )
 
 @celery_app.task(bind=True, base=BaseTaskWithRetry)
-def rag_chat_task(self, user_id, chat_session_id, query, project_id, model_type):
+def new_chat_session(self, user_id, project_id):
     """
-    Main RAG workflow:
-    1. Ensure a chat session exists
-    2. Embed the user query
-    3. Retrieve relevant document chunks
-    4. Publish LLM response to redis topic `chat_result`
-    5. Persist query and answer in Supabase public.messages table
+    Simple task to creae a new chat_session and associate it  query to public.messages in Supabase before performing RAG Q&A
+
+    1) INSERT a new blank conversation row into Supabase public.chat_sessions
+    2) UPDATE a given public.project's newly created "chat_session_id" column
+    """
+    try:
+        # Step 1) Create blank chat_session object if needed
+        response = create_new_chat_session(
+            supabase_client,
+            table_name="chat_sessions",
+            user_id=user_id, 
+            project_id=project_id,
+        )
+        new_chat_session_id = response.data[0]["id"]
+
+        # Step 2) UPDATE public.projects, chat_session_id column
+        try:
+            _ = client \
+            .table("projects") \
+            .update({"chat_session_id": new_chat_session_id}) \
+            .eq("id", project_id) \
+            .execute()
+        except Exception as e:
+            raise Exception(f"Error saving to public.projects: {e}")
+        return None
+
+    except Exception as e:
+        logger.error(f"Create new_chat_session task failed: {e}", exc_info=True)
+        # Retry on failure according to BaseTaskWithRetry policies
+        raise self.retry(exc=e)
+
+@celery_app.task(bind=True, base=BaseTaskWithRetry)
+def persist_user_query(self, user_id, chat_session_id, query, project_id, model_type):
+    """
+    Simple task to persist user query to public.messages in Supabase before performing RAG Q&A
     """
     try:
         # Set explicit start time metadata
-        self.update_state(state="PENDING", meta={"start_time": datetime.now(timezone.utc).isoformat()})
+        # This manually sets result = AsyncResult(task_id) when checking on this celery task via job.id
+        # result.state → "PENDING"
+        # result.info → {"start_time": "..."}
+        self.update_state(
+            state="STARTED", # ← using "PENDING" can confuse clients into thinking the task has not started yet
+            meta={
+                "start_time": datetime.now(timezone.utc).isoformat()
+            }
+        )
 
-        # Step 1) Initialize or create conversation if needed
-        if not chat_session_id:
-            chat_session_id = create_new_conversation(user_id, project_id)
+        # Step 1) Persist user query to public.messages
+        response = insert_chat_message_supabase_record(
+            supabase_client,
+            table_name="messages",
+            user_id=user_id,
+            chat_session_id=chat_session_id,
+            dialogue_role="user",
+            message_content=query,
+            query_response_status="PENDING",
+            created_at=datetime.now(timezone.utc).isoformat()
+        )
 
-        # Step 2) Embed the query using OpenAI Ada embeddings (1536 dims)
+        # Step 2) Return completed answer for HTTP response (unpacked in WeWeb)
+        inserted_id = response.data[0]["id"]
+        return inserted_id
+
+    except Exception as e:
+        logger.error(f"RAG Chat Task failed: {e}", exc_info=True)
+        # Retry on failure according to BaseTaskWithRetry policies
+        raise self.retry(exc=e)
+
+@celery_app.task(bind=True, base=BaseTaskWithRetry)
+def rag_chat_task(
+    self, 
+    message_id,     # ← note: passed in first by chained task
+    user_id, 
+    chat_session_id, 
+    query, 
+    project_id, 
+    model_type,
+):
+    """
+    Main RAG workflow, implementing the standard “optimistic UI” pattern
+    1. Embed the user query
+    2. Fetch top-K relevant chunks
+    3. Generate llm_assistant answer
+    4. Persist llm assistant answer in Supabase public.messages table (retry failure precaution?)
+    """
+    try:
+        # Set explicit start time metadata
+        # This manually sets result = AsyncResult(task_id) when checking on this celery task via job.id
+        # result.state → "PENDING"
+        # result.info → {"start_time": "..."}
+        self.update_state(
+            state="STARTED", # ← using "PENDING" can confuse clients into thinking the task has not started yet
+            meta={
+                "start_time": datetime.now(timezone.utc).isoformat()
+            }
+        )
+
+        # Step 1) Embed the query using OpenAI Ada embeddings (1536 dims)
         embedding_model = OpenAIEmbeddings(model="text-embedding-ada-002")
         query_embedding = embedding_model.embed_query(query)
 
-        # Step 3) Fetch top-K relevant chunks via Supabase RPC
+        # Step 2) Fetch top-K relevant chunks via Supabase RPC
         relevant_chunks = fetch_relevant_chunks(query_embedding, project_id)
 
-        # Step 4) Generation answer for client (@TODO may be used to token streaming at a later point )
-        full_answer = generate_rag_answer(
+        # Step 3) Generation answer for client (@TODO may be used to token streaming at a later point )
+        assistant_response = generate_rag_answer(
             query,
             chat_session_id,
             relevant_chunks,
             model_name=model_type  # supports gpt-4o, gemini-flash, deepseek-v3, etc.
         )
 
-        # Step 4) Publish final answer to Redis pub/sub, topic name "chat_result"
-        redis_sync.publish(f"chat_result:{chat_session_id}", json.dumps({
-            "status": "SUCCESS",
-            "message_role": "assistant",
-            "message": full_answer
-        }))
-
-        # Step 5) Save entire conversation turn in DB
-        save_conversation(
-            chat_session_id, 
-            user_id, 
-            query, 
-            answer=full_answer      # full rag reponse
+        # Step 4) insert assistant response
+        _ = insert_chat_message_supabase_record(
+            supabase_client,
+            table_name="messages",
+            user_id=user_id,
+            chat_session_id=chat_session_id,
+            dialogue_role="assistant",
+            message_content=answer,
+            query_response_status="COMPLETE",
+            created_at=datetime.now(timezone.utc).isoformat()
         )
+        # # Step 4) Publish final answer to Redis pub/sub, topic name "chat_result"
+        # redis_sync.publish(f"chat_result:{chat_session_id}", json.dumps({
+        #     "status": "SUCCESS",
+        #     "message_role": "assistant",
+        #     "message": assistant_response
+        # }))
 
-        # Return completed answer for HTTP response (unpacked in WeWeb)
-        return {"answer": full_answer, "message_role": "assistant"}
+        # # Step 5) Save entire conversation turn in DB
+        # save_conversation(
+        #     chat_session_id, 
+        #     user_id, 
+        #     query, 
+        #     answer=assistant_response      # full rag reponse
+        # )
+
+        # Step 5) UPDATE public.messages column ???????
+        try:
+            _ = client \
+            .table("messages") \
+            .update({"query_response_status": "COMPLETE"}) \
+            .eq("id", message_id) \
+            .execute()
+        except Exception as e:
+            raise Exception(f"Error updating public.messages status: {e}")
+        return None
 
     except Exception as e:
         logger.error(f"RAG Chat Task failed: {e}", exc_info=True)
@@ -186,24 +288,25 @@ def save_conversation(chat_session_id, user_id, query, answer):
     """
     Persists user and assistant messages into Supabase public.messages table.
     """
-    # insert user query
-    insert_conversation_supabase_record(
-        supabase_client,
-        table_name="message",
-        user_id=user_id,
-        chat_session_id=chat_session_id,
-        dialogue_role="user",
-        message_content=query,
-        created_at=datetime.now(timezone.utc).isoformat()
-    )
+    # # insert user query
+    # insert_chat_message_supabase_record(
+    #     supabase_client,
+    #     table_name="message",
+    #     user_id=user_id,
+    #     chat_session_id=chat_session_id,
+    #     dialogue_role="user",
+    #     message_content=query,
+    #     created_at=datetime.now(timezone.utc).isoformat()
+    # )
     # insert assistant response
-    insert_conversation_supabase_record(
+    insert_chat_message_supabase_record(
         supabase_client,
-        table_name="message",
+        table_name="messages",
         user_id=user_id,
         chat_session_id=chat_session_id,
         dialogue_role="assistant",
         message_content=answer,
+        query_response_status="",
         created_at=datetime.now(timezone.utc).isoformat()
     )
 

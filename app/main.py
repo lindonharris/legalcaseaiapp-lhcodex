@@ -9,18 +9,22 @@ from datetime import datetime, timezone
 from typing import List, Dict, Any, Literal
 import uuid
 from fastapi import FastAPI, HTTPException, Query
+import logging
+import redis.asyncio as aioredis 
+
+# utils imports
 from utils.supabase_utils import supabase_client
 from utils.pdf_utils import extract_text_from_pdf
+
+# Celery task imports
+from celery import chain, chord, group, states
+from celery.result import AsyncResult
 from tasks.podcast_generate_tasks import validate_and_generate_audio_task, generate_dialogue_only_task
 from tasks.upload_tasks import process_pdf_task
 from tasks.test_tasks import addition_task
 from tasks.chat_streaming_tasks import rag_chat_streaming_task
-from tasks.chat_tasks import rag_chat_task
+from tasks.chat_tasks import rag_chat_task, persist_user_query
 from tasks.note_tasks import rag_note_task 
-from celery import chain, chord, group, states
-from celery.result import AsyncResult
-import redis.asyncio as aioredis 
-import logging
 
 # Configure logging (basic example, adjust as needed)
 logging.basicConfig(level=logging.INFO)
@@ -157,7 +161,6 @@ class RagQueryRequest(BaseModel):
     user_id: str
     chat_session_id: str
     query: str
-    # document_ids: List[str]
     project_id: str
     model_type: str
 
@@ -178,6 +181,16 @@ class RagQueryResponse(BaseModel):
     chat_session_id: str
     query: str
     # document_ids: List[str]
+    project_id: str
+    model_type: str
+
+class RagRegenerateRequest(BaseModel):  
+    '''
+    Pydantic request model for for `POST/rag-chat/regenerate` endpoiont
+    Mainly uses the "FAILED" messages row.id to retry that query
+    '''
+    message_id: str        # ← public.messages.id
+    chat_session_id: str
     project_id: str
     model_type: str
 
@@ -266,7 +279,7 @@ async def celery_test_addition(request: AdditionRequest):
 
 
 # ================================================ #
-#               RAG API ENDPOINTS
+#                RAG CHAT ENDPOINTS
 # ================================================ #
 @app.post("/new-rag-project/", response_model=NewRagPipelineResponse)
 async def create_new_rag_project(
@@ -405,8 +418,9 @@ async def append_sources_to_project(request: NewRagPipelineRequest, background_t
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.post("/generate-rag-note/")
-async def generate_rag_note(request: RagQueryRequest):
+@app.post("/rag-chat/original")
+async def rag_chat_original(request: RagQueryRequest):
+    """Endpoint for the rag query responses (token streaming not enabled)"""
     try:
         # Trigger the RAG task asynchronously and add it to the queue
         task = rag_chat_task.apply_async(args=[
@@ -424,17 +438,42 @@ async def generate_rag_note(request: RagQueryRequest):
 
 @app.post("/rag-chat/")
 async def rag_chat(request: RagQueryRequest):
-    """Endpoint for the rag query responses (token streaming not enabled)"""
+    """
+    Endpoint for the rag query responses (token streaming not enabled)
+    Uses Celery chain to perform persist → rag back-to-back
+    
+    **FYI chords are used to fire off several task in parallel, then call one callback with all their results
+
+    Raw json:
+    ----------
+    {
+        "user_id": "...",
+        "chat_session_id": "...",
+        "query": "...",
+        "project_id": "...",
+        "model_type": "..." 
+    }
+    """
     try:
-        # Trigger the RAG task asynchronously and add it to the queue
-        task = rag_chat_task.apply_async(args=[
-            request.user_id,
-            request.chat_session_id,
-            request.query,
-            request.project_id,
-            request.model_type
-        ])
-        
+        # Build a chain: persist → rag
+        job = chain(
+            persist_user_query.s(
+                request.user_id,
+                request.chat_session_id,
+                request.query,
+                request.project_id,
+                request.model_type
+            ),
+            # the return value of persist_user_query (i.e. message_id) ...
+            # will be passed as the FIRST arg to rag_chat_task
+            rag_chat_task.s(
+                request.user_id,
+                request.chat_session_id,
+                request.query,
+                request.project_id,
+                request.model_type
+            )
+        ).apply_async()
         # Return the task ID to the client
         return {"task_id": task.id}
     except Exception as e:
@@ -442,7 +481,7 @@ async def rag_chat(request: RagQueryRequest):
 
 @app.post("/rag-chat-stream/")
 async def rag_chat_stream(request: RagQueryRequest):
-    """Endpoint for the rag query responses (token streaming not ENABLED), still a work in progress"""
+    """Endpoint for the rag query responses (token streaming not ENABLED), still a WORK IN PROGRESS !!! """
     try:
         # Trigger the RAG task asynchronously and add it to the queue
         task = rag_chat_streaming_task.apply_async(args=[
@@ -457,6 +496,56 @@ async def rag_chat_stream(request: RagQueryRequest):
         return {"task_id": task.id}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/rag-chat/regenerate/")
+async def rag_chat_regenerate(request: RagRegenerateRequest):
+    """
+    Endpoint for regenerating a "FAILED" RAG query (token streaming not ENABLED)
+    
+    Raw json:
+    ----------
+    {
+        "user_id": "...",
+        "chat_session_id": "...",
+        "query": "...",
+        "project_id": "...",
+        "model_type": "..." 
+    }
+    """
+    try:
+        # Trigger the RAG task asynchronously and add it to the queue
+        task = rag_chat_streaming_task.apply_async(args=[
+            request.user_id,
+            request.message_id,
+            request.query,
+            request.project_id,
+            request.model_type
+        ])
+        
+        # Return the task ID to the client
+        return {"task_id": task.id}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/rag-chat-stream/regenerate/")
+async def rag_chat_stream_regenerate(request: RagQueryRequest):
+    """@TODO Endpoint for regenerating a failed RAG query (token streaming IS ENABLED), still a WORK IN PROGRESS !!! """
+    try:
+        # Trigger the RAG task asynchronously and add it to the queue
+        task = rag_chat_streaming_task.apply_async(args=[
+            request.user_id,
+            request.chat_session_id,
+            request.query,
+            request.project_id,
+            request.model_type
+        ])
+        
+        # Return the task ID to the client
+        return {"task_id": task.id}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 
 @app.get("/pdf-upload-task-status/{task_id}")
 async def get_pdf_upload_status(task_id: str):
@@ -613,6 +702,38 @@ async def get_rag_chat_status(task_id: str):
         return {"task_id": task_id, "status": "FAILURE", "error": str(result.result)}
     else:
         return {"task_id": task_id, "status": result.state}
+
+# ================================================ #
+#          RAG GENERATIVE NOTES ENDPOINTS
+# ================================================ #
+
+@app.post("/generate-rag-note/")
+async def generate_rag_note(request: RagQueryRequest):
+    """
+    postman raw json body:
+    {
+        "user_id": "",
+        "chat_session_id": "",
+        "query": "",
+        "project_id": "",
+        "model_type": "" 
+    }
+    """
+    try:
+        # Trigger the RAG task asynchronously and add it to the queue
+        task = rag_chat_task.apply_async(args=[
+            request.user_id,
+            request.chat_session_id,
+            request.query,
+            request.project_id,
+            request.model_type
+        ])
+        
+        # Return the task ID to the client
+        return {"task_id": task.id}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 
 # ================================================ #
 #              PODCAST API ENDPOINTS

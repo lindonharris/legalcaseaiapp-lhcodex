@@ -102,7 +102,13 @@ def rag_note_task(
     """
     try:
         # Set explicit start time metadata
-        self.update_state(state="PENDING", meta={"start_time": datetime.now(timezone.utc).isoformat()})
+        # This manually sets result = AsyncResult(task_id) when checking on this celery task via job.id
+        # result.state → "PENDING"
+        # result.info → {"start_time": "..."}
+        self.update_state(
+            state="STARTED", 
+            meta={"start_time": datetime.now(timezone.utc).isoformat()}
+        )
 
         if note_type == "outline":
             query = "Create a comprehensive oputline of the following documents"
