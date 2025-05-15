@@ -475,7 +475,7 @@ async def rag_chat(request: RagQueryRequest):
             )
         ).apply_async()
         # Return the task ID to the client
-        return {"task_id": task.id}
+        return {"task_id": job.id}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

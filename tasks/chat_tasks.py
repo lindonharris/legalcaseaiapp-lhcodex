@@ -78,7 +78,7 @@ def get_chat_llm(model_name: str = "gpt-4o-mini", callback_manager: CallbackMana
 @celery_app.task(bind=True, base=BaseTaskWithRetry)
 def new_chat_session(self, user_id, project_id):
     """
-    Simple task to creae a new chat_session and associate it  query to public.messages in Supabase before performing RAG Q&A
+    Simple task to creae a new chat_session and associate it query to public.messages in Supabase before performing RAG Q&A
 
     1) INSERT a new blank conversation row into Supabase public.chat_sessions
     2) UPDATE a given public.project's newly created "chat_session_id" column
@@ -93,7 +93,9 @@ def new_chat_session(self, user_id, project_id):
         )
         new_chat_session_id = response.data[0]["id"]
 
-        # Step 2) UPDATE public.projects, chat_session_id column
+        # Step 2) UPDATE/REPLACE public.projects, chat_session_id column
+        # @TODO: I WILL have orphan chats in chat_sessions that need to be cleared out when
+        # the user clears the chat 🔃 session in the UI
         try:
             _ = supabase_client \
             .table("projects") \

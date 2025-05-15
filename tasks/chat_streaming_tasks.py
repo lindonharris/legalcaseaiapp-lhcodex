@@ -7,7 +7,7 @@ from tasks.celery_app import celery_app  # Import the Celery app instance (see c
 import logging
 import os
 from supabase import create_client, Client
-from utils.supabase_utils import insert_conversation_supabase_record, supabase_client
+from utils.supabase_utils import insert_chat_message_supabase_record, supabase_client
 from datetime import datetime, timezone
 import requests
 import tempfile
@@ -163,7 +163,7 @@ def save_conversation(chat_session_id, user_id, query, answer):
     """
     Persists user and assistant messages into Supabase messages table.
     """
-    insert_conversation_supabase_record(
+    insert_chat_message_supabase_record(
         supabase_client,
         table_name="message",
         user_id=user_id,
@@ -172,7 +172,7 @@ def save_conversation(chat_session_id, user_id, query, answer):
         message_content=query,
         created_at=datetime.now(timezone.utc).isoformat()
     )
-    insert_conversation_supabase_record(
+    insert_chat_message_supabase_record(
         supabase_client,
         table_name="message",
         user_id=user_id,

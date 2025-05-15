@@ -18,13 +18,17 @@ supabase_client: Client = create_client(
 # Init logger
 logger = logging.getLogger(__name__)
 
-def create_new_chat_session(client, table_name, cdn_url, project_id):
+def create_new_chat_session(
+    client, 
+    table_name,
+    user_id,
+    project_id
+):
     '''INSERT/CREATE a new chat_session object table public.chat_sessions'''
     try:
         response = client.table(table_name).insert({
             "user_id": user_id,
             "project_id": project_id,
-            "created_at": created_at,
         }).execute()
     except Exception as e:
         raise Exception(f"Error saving to public.chat_sessions: {e}")
