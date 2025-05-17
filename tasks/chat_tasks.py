@@ -335,7 +335,7 @@ def format_chat_history(chat_history):
     """
     Converts list of messages to a single string for prompt context.
     """
-    return "".join(f"{m['message_role'].capitalize()}: {m['message_content']}\n" for m in chat_history)
+    return "".join(f"{m['role'].capitalize()}: {m['content']}\n" for m in chat_history)
 
 def trim_context_length(full_context, query, relevant_chunks, model_name, max_tokens): 
     """
