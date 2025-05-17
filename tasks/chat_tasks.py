@@ -76,6 +76,7 @@ def get_chat_llm(model_name: str = "gpt-4o-mini", callback_manager: CallbackMana
     """
     return ChatOpenAI(
         model=model_name,
+        api_key=OPENAI_API_KEY,
         temperature=0.7,
         streaming=False,                            # Disable streaming if callbacks exist
         callback_manager=None                       # attaches our StreamToClientHandler
