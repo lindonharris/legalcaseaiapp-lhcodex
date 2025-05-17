@@ -91,7 +91,7 @@ def rag_note_task(
     user_id, 
     note_type,          # ← note_type here
     project_id, 
-    model_type
+    model_name
 ):
     """
     Main RAG workflow:
@@ -126,7 +126,7 @@ def rag_note_task(
         full_answer = generate_rag_answer(
             query,
             relevant_chunks,
-            model_name=model_type  # supports gpt-4o, gemini-flash, deepseek-v3, etc.
+            model_name=model_name  # supports gpt-4o, gemini-flash, deepseek-v3, etc.
         )
 
         # Step 5) Save note to the public.notes table in Supabase (realtime Supabase table)

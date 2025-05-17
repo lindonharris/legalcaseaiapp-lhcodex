@@ -77,7 +77,7 @@ def process_pdf_task(self, files, metadata=None):
     metadata (json): {
         'user_id': UUID,
         'project_id': UUID,
-        'model_type': 'gpt-4o-mini', 'llama3.1'...,
+        'model_name': 'gpt-4o-mini', 'llama3.1'...,
         'note_type': 'case_summary'
 
     """
@@ -318,7 +318,7 @@ def process_pdf_task(self, files, metadata=None):
             source_ids,
             metadata["project_id"],
             metadata.get("note_type", "None"),          # default to "None" if missing
-            metadata.get("model_type", "gpt-4o-mini")   # default to gpt-4o-mini  
+            metadata.get("model_name", "gpt-4o-mini")   # default to gpt-4o-mini  
         )
         chord_result = chord(embedding_tasks)(callback)
         workflow_id = chord_result.id
@@ -398,7 +398,7 @@ def process_pdf_task_05112025(self, files, metadata=None):
         metadata (json): {
             'user_id': UUID,
             'project_id': UUID,
-            'model_type': 'gpt-4o', 'llama3.1'...,
+            'model_name': 'gpt-4o', 'llama3.1'...,
             'note_type': 'case_summary'
         }
 
@@ -581,7 +581,7 @@ def process_pdf_task_no_chord(self, files, metadata=None):
         metadata (json): {
             'user_id': UUID,
             'project_id': UUID,
-            'model_type': 'gpt-4o', 'llama3.1'...,
+            'model_name': 'gpt-4o', 'llama3.1'...,
             'note_type': 'case_summary'
         }
 
@@ -793,7 +793,7 @@ def finalize_document_processing_workflow(
     source_ids: List[str],
     project_id: str,
     note_type: str,
-    model_type: str
+    model_name: str
 ):
     """
     Celery callback after all chunk_and_embed_task tasks in a chord complete.
@@ -859,7 +859,7 @@ def finalize_document_processing_workflow(
                     user_id,
                     note_type,
                     project_id,
-                    model_type
+                    model_name
                 ])
             
             # Update a workflow status record if needed

@@ -68,7 +68,7 @@ def get_chat_llm(model_name: str, callback_manager: CallbackManager = None) -> C
     )
 
 @celery_app.task(bind=True, base=BaseTaskWithRetry)
-def rag_chat_streaming_task(self, user_id, chat_session_id, query, project_id, model_type):
+def rag_chat_streaming_task(self, user_id, chat_session_id, query, project_id, model_name):
     """
     Main RAG workflow:
     1. Ensure a chat session exists
@@ -94,7 +94,7 @@ def rag_chat_streaming_task(self, user_id, chat_session_id, query, project_id, m
             query,
             chat_session_id,
             relevant_chunks,
-            model_name=model_type  # supports gpt-4o, gemini-flash, deepseek-v3, etc.
+            model_name=model_name  # supports gpt-4o, gemini-flash, deepseek-v3, etc.
         )
 
         # 5) Save entire conversation turn in DB
