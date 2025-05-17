@@ -20,6 +20,7 @@ import requests
 import tempfile
 import uuid
 import json
+import tiktoken
 from dotenv import load_dotenv
 
 
@@ -222,20 +223,6 @@ def rag_chat_task(
             query_response_status="COMPLETE",
             created_at=datetime.now(timezone.utc).isoformat()
         )
-        # # Step 4) Publish final answer to Redis pub/sub, topic name "chat_result"
-        # redis_sync.publish(f"chat_result:{chat_session_id}", json.dumps({
-        #     "status": "SUCCESS",
-        #     "message_role": "assistant",
-        #     "message": assistant_response
-        # }))
-
-        # # Step 5) Save entire conversation turn in DB
-        # save_conversation(
-        #     chat_session_id, 
-        #     user_id, 
-        #     query, 
-        #     answer=assistant_response      # full rag reponse
-        # )
 
         # Step 5) UPDATE public.messages column ???????
         try:
@@ -281,7 +268,7 @@ def generate_rag_answer(query, chat_session_id, relevant_chunks, model_name, max
         f"{formatted_history}\n\nRelevant Context:\n{chunk_context}\n\n"
         f"User Query: {query}\nAssistant:"
     )
-    full_context = trim_context_length(full_context, query, relevant_chunks, model_name, max_tokens=127999)
+    trimmed_context  = trim_context_length(full_context, query, relevant_chunks, model_name, max_tokens=127999)
 
     # Set up streaming callback for token-level pushes
     # handler = StreamToClientHandler(chat_session_id)                     # Disabled, no token streaming
@@ -289,7 +276,7 @@ def generate_rag_answer(query, chat_session_id, relevant_chunks, model_name, max
     llm = get_chat_llm(model_name)
 
     # Streaming prediction: on_llm_new_token fires for each token
-    answer = llm.predict(full_context)
+    answer = llm.predict(trimmed_context )
     return answer
 
 def create_new_conversation(user_id, project_id):
@@ -344,22 +331,59 @@ def format_chat_history(chat_history):
     """
     Converts list of messages to a single string for prompt context.
     """
-    return "".join(f"{m['role'].capitalize()}: {m['content']}\n" for m in chat_history)
+    formatted_string = "".join(f"{m['role'].capitalize()}: {m['content']}\n" for m in chat_history)
+    return formatted_string.strip()
 
-
-def trim_context_length(full_context, query, relevant_chunks, model_name, max_tokens): 
+def trim_context_length(full_context, query, relevant_chunks, model_name, max_tokens):
     """
     Iteratively remove chunks until prompt fits within model token limit.
     """
-    import tiktoken
-    tokenizer = tiktoken.encoding_for_model(model_name)
-    history = full_context
-    # While over token budget, drop least relevant chunks
+    # Map custom/internal model names to known tiktoken encoding names
+    # Add mappings for all models you expect to use here
+    model_to_encoding = {
+        "o4-mini": "o200k_base", # Assuming o4-mini uses the gpt-4o encoding
+        "gpt-4o": "o200k_base",
+        "gpt-4-turbo": "cl100k_base",
+        "gpt-4": "cl100k_base",
+        "gpt-3.5-turbo": "cl100k_base",
+        "text-embedding-ada-002": "cl100k_base",
+        # Add other mappings if you use different models (e.g., for Claude, etc.)
+        # Note: Non-OpenAI models might require different tokenization libraries or approaches.
+        # This mapping works ONLY for models using tiktoken encodings.
+    }
+
+    # Get the encoding name based on the model_name.
+    # Provide a fallback (like 'cl100k_base') or raise an error if the model name is not in the map.
+    encoding_name = model_to_encoding.get(model_name)
+
+    if not encoding_name:
+        logger.warning(f"Unknown model name '{model_name}'. Cannot determine tiktoken encoding. Using fallback 'cl100k_base'.")
+        encoding_name = "cl100k_base" # Fallback to a common encoding
+
+    try:
+        # Use get_encoding with the determined encoding name
+        tokenizer = tiktoken.get_encoding(encoding_name)
+    except ValueError:
+        logger.error(f"Failed to get tiktoken encoding for name '{encoding_name}' (mapped from model '{model_name}'). Falling back to 'cl100k_base'.")
+        # Fallback if the mapped encoding name is itself invalid
+        tokenizer = tiktoken.get_encoding("cl100k_base")
+
+
+    history = full_context # Initialize token calculation with the full context string
+
+    # Note: The original loop logic here modifies relevant_chunks and recalculates 'history'
+    # based on chunks and query. However, the function *returns* the original
+    # 'full_context' string, making the trimming ineffective as written in the original code.
+    # This fix addresses the tiktoken error but does not correct this potential logic bug
+    # in how the trimmed context is returned.
     while len(tokenizer.encode(history)) > max_tokens and relevant_chunks:
-        relevant_chunks.pop()
+        relevant_chunks.pop() # Remove the least relevant chunk
+
+        # Rebuild the string used for token counting in the loop.
         chunk_context = "\n\n".join(c["content"] for c in relevant_chunks)
         history = f"Relevant Context:\n{chunk_context}\n\nUser Query: {query}\nAssistant:"
-    return full_context
+
+    return history # <-- Change to this to make trimming effective and return the string used in the loop calculation.
 
 # def trim_context_length(full_context, query, relevant_chunks, model_name, max_tokens): 
 #     """
