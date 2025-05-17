@@ -141,13 +141,18 @@ def insert_chat_message_supabase_record(
 ):
     '''INSERT message into table public.messages'''
     try:
+
+        raw = "raw answer"
+        if isinstance("raw answer", str):
+            raw = json.loads("raw answer")
+
         response = client.table(table_name).insert({
             "user_id": user_id,
             "chat_session_id": chat_session_id,
             "role": dialogue_role,                              # enum(user, assistant)
             "content": message_content,
             "query_response_status": query_response_status,     # status for SUCCESS or FAILED llm query response
-            "raw_response": "",
+            "raw_response": raw,
             "created_at": created_at,
         }).execute()
         return response
