@@ -162,7 +162,7 @@ class RagQueryRequest(BaseModel):
     chat_session_id: str
     query: str
     project_id: str
-    model_type: str
+    model_name: str
 
 class RagQueryResponse(BaseModel):  
     '''
@@ -173,7 +173,7 @@ class RagQueryResponse(BaseModel):
         "chat_session_id",
         "query",
         "project_id",
-        "model_type"
+        "model_name"
 
     }
     '''
@@ -182,7 +182,7 @@ class RagQueryResponse(BaseModel):
     query: str
     # document_ids: List[str]
     project_id: str
-    model_type: str
+    model_name: str
 
 class RagRegenerateRequest(BaseModel):  
     '''
@@ -192,7 +192,7 @@ class RagRegenerateRequest(BaseModel):
     message_id: str        # ← public.messages.id
     chat_session_id: str
     project_id: str
-    model_type: str
+    model_name: str
 
 # ================================================ #
 #                  WEBSOCKETS
@@ -297,7 +297,7 @@ async def create_new_rag_project(
         request.metadata (json): {
             user_id: UUID
             project_id: UUID
-            model_type: string (optional) 
+            model_name: string (optional) 
             note_type: string
         }
     '''
@@ -362,7 +362,7 @@ async def create_new_rag_project_and_gen_notes(
                 request.metadata["chat_session_id"],
                 request.metadata["summary_query"],  # e.g. your custom "Based on the docs…" prompt
                 request.metadata["project_id"],
-                request.metadata["model_type"]
+                request.metadata["model_name"]
             )
         )
         result: AsyncResult = workflow.apply_async()
@@ -428,7 +428,7 @@ async def rag_chat_original(request: RagQueryRequest):
             request.chat_session_id,
             request.query,
             request.project_id,
-            request.model_type
+            request.model_name
         ])
         
         # Return the task ID to the client
@@ -451,7 +451,7 @@ async def rag_chat(request: RagQueryRequest):
         "chat_session_id": "...",
         "query": "...",
         "project_id": "...",
-        "model_type": "..." 
+        "model_name": "..." 
     }
     """
     try:
@@ -462,7 +462,7 @@ async def rag_chat(request: RagQueryRequest):
                 request.chat_session_id,
                 request.query,
                 request.project_id,
-                request.model_type
+                request.model_name
             ),
             # the return value of persist_user_query (i.e. message_id) ...
             # will be passed as the FIRST arg to rag_chat_task
@@ -471,7 +471,7 @@ async def rag_chat(request: RagQueryRequest):
                 request.chat_session_id,
                 request.query,
                 request.project_id,
-                request.model_type
+                request.model_name
             )
         ).apply_async()
         # Return the task ID to the client
@@ -489,7 +489,7 @@ async def rag_chat_stream(request: RagQueryRequest):
             request.chat_session_id,
             request.query,
             request.project_id,
-            request.model_type
+            request.model_name
         ])
         
         # Return the task ID to the client
@@ -509,7 +509,7 @@ async def rag_chat_regenerate(request: RagRegenerateRequest):
         "chat_session_id": "...",
         "query": "...",
         "project_id": "...",
-        "model_type": "..." 
+        "model_name": "..." 
     }
     """
     try:
@@ -519,7 +519,7 @@ async def rag_chat_regenerate(request: RagRegenerateRequest):
             request.message_id,
             request.query,
             request.project_id,
-            request.model_type
+            request.model_name
         ])
         
         # Return the task ID to the client
@@ -538,7 +538,7 @@ async def rag_chat_stream_regenerate(request: RagQueryRequest):
             request.chat_session_id,
             request.query,
             request.project_id,
-            request.model_type
+            request.model_name
         ])
         
         # Return the task ID to the client
@@ -716,7 +716,7 @@ async def generate_rag_note(request: RagQueryRequest):
         "chat_session_id": "",
         "query": "",
         "project_id": "",
-        "model_type": "" 
+        "model_name": "" 
     }
     """
     try:
@@ -726,7 +726,7 @@ async def generate_rag_note(request: RagQueryRequest):
             request.chat_session_id,
             request.query,
             request.project_id,
-            request.model_type
+            request.model_name
         ])
         
         # Return the task ID to the client
