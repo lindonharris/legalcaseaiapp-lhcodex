@@ -734,7 +734,8 @@ def chunk_and_embed_task(self, pdf_url, source_id, project_id, chunk_size=1000, 
         # 4) Batch embed all chunks in one call
         embedding_model = OpenAIEmbeddings(
             model="text-embedding-ada-002",
-            api_key=OPENAI_API_KEY)
+            api_key=OPENAI_API_KEY,
+        )
         embeddings = embedding_model.embed_documents(texts)
 
         # Guard against any mis-shaped vector dimensions

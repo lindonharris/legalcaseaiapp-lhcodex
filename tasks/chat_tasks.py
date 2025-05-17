@@ -15,6 +15,8 @@ import requests
 import tempfile
 import uuid
 import json
+from dotenv import load_dotenv
+
 
 # langchain imports
 from langchain_core.load import dumpd
@@ -26,6 +28,10 @@ from langchain.callbacks.manager import CallbackManager
 # from langchain.document_loaders import PyPDFLoader
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import CharacterTextSplitter
+
+# API Keys
+load_dotenv()
+OPENAI_API_KEY = os.environ.get("OPENAI_API_PROD_KEY")
 
 logger = logging.getLogger(__name__)
 
@@ -179,7 +185,10 @@ def rag_chat_task(
         )
 
         # Step 1) Embed the query using OpenAI Ada embeddings (1536 dims)
-        embedding_model = OpenAIEmbeddings(model="text-embedding-ada-002")
+        embedding_model = OpenAIEmbeddings(
+            model="text-embedding-ada-002",
+            api_key=OPENAI_API_KEY,
+        )
         query_embedding = embedding_model.embed_query(query)
 
         # Step 2) Fetch top-K relevant chunks via Supabase RPC
