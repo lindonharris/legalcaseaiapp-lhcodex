@@ -184,6 +184,9 @@ def rag_chat_task(
             }
         )
 
+        if model_type is "":
+            model_type="gpt-o4-mini"
+
         # Step 1) Embed the query using OpenAI Ada embeddings (1536 dims)
         embedding_model = OpenAIEmbeddings(
             model="text-embedding-ada-002",
@@ -342,7 +345,14 @@ def trim_context_length(full_context, query, relevant_chunks, model_name, max_to
     Iteratively remove chunks until prompt fits within model token limit.
     """
     import tiktoken
-    tokenizer = tiktoken.encoding_for_model(model_name)
+    try:
+        if model_name is "":
+            model_name="gpt-o4-mini"
+    
+        tokenizer = tiktoken.encoding_for_model(model_name)
+    except KeyError:
+        logger.warning(f"Unknown model '{model_name}', falling back to 'cl100k_base' tokenizer")
+        tokenizer = tiktoken.get_encoding("cl100k_base")
     history = full_context
     # While over token budget, drop least relevant chunks
     while len(tokenizer.encode(history)) > max_tokens and relevant_chunks:
