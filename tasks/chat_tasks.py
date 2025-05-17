@@ -1,6 +1,11 @@
 '''
 This file runs Celery tasks for handling RAG chat tasks (non-streaming LLM responses)
 Handles RAG chat tasks without token streaming. Returns full answer in one go.
+
+Models
+o4-mini
+gpt-4.1-nano
+
 '''
 
 from celery import Celery, Task
@@ -67,12 +72,12 @@ class StreamToClientHandler(BaseCallbackHandler):
         # Called by LangChain for every new token in streaming mode
         publish_token(self.session_id, token)
 
-def get_chat_llm(model_name: str = "gpt-4o-mini", callback_manager: CallbackManager = None) -> ChatOpenAI:
+def get_chat_llm(model_name: str = "o4-mini", callback_manager: CallbackManager = None) -> ChatOpenAI:
     """
     Factory to create a ChatOpenAI instance.
     If callback_manager is provided, enable streaming and attach handlers.
 
-    (default) OpenAI gpt-4o-mini model
+    (default) OpenAI o4-mini model
     """
     return ChatOpenAI(
         model=model_name,
@@ -186,7 +191,7 @@ def rag_chat_task(
         )
 
         if model_type == "":
-            model_type="gpt-o4-mini"
+            model_type="o4-mini"
 
         # Step 1) Embed the query using OpenAI Ada embeddings (1536 dims)
         embedding_model = OpenAIEmbeddings(
@@ -363,7 +368,7 @@ def trim_context_length(full_context, query, relevant_chunks, model_name, max_to
 #     import tiktoken
 #     try:
 #         if model_name == "":
-#             model_name="gpt-o4-mini"
+#             model_name="o4-mini"
     
 #         tokenizer = tiktoken.encoding_for_model(model_name)
 #     except KeyError:
