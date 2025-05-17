@@ -35,9 +35,21 @@ from langchain.callbacks.manager import CallbackManager
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import CharacterTextSplitter
 
+#### GLOBAL ####
+
 # API Keys
 load_dotenv()
 OPENAI_API_KEY = os.environ.get("OPENAI_API_PROD_KEY")
+
+# Define which models support temp (and their allowed ranges, if you like)
+_MODEL_TEMPERATURE_CONFIG = {
+    # no-temperature models
+    "o4-mini":      {"supports_temperature": False},
+    "gpt-4o-mini":  {"supports_temperature": False},
+    # temperature-capable models
+    "gpt-4.1-nano": {"supports_temperature": True, "min": 0.0, "max": 2.0},
+    # add more entries here as needed...
+}
 
 logger = logging.getLogger(__name__)
 
@@ -73,20 +85,36 @@ class StreamToClientHandler(BaseCallbackHandler):
         # Called by LangChain for every new token in streaming mode
         publish_token(self.session_id, token)
 
-def get_chat_llm(model_name: str = "o4-mini", callback_manager: CallbackManager = None) -> ChatOpenAI:
+def get_chat_llm(
+    model_name: str = "gpt-4o-mini",
+    temperature: float = 0.7,
+    callback_manager: CallbackManager = None,
+) -> ChatOpenAI:
     """
     Factory to create a ChatOpenAI instance.
     If callback_manager is provided, enable streaming and attach handlers.
 
     (default) OpenAI o4-mini model
     """
-    return ChatOpenAI(
-        model=model_name,
-        api_key=OPENAI_API_KEY,
-        temperature=0.7,
-        streaming=False,                            # Disable streaming if callbacks exist
-        callback_manager=None                       # attaches our StreamToClientHandler
-    )
+    
+    cfg = _MODEL_TEMPERATURE_CONFIG.get(model_name, {"supports_temperature": True})
+    llm_kwargs = {
+        "model": model_name,
+        "streaming": False,     # Disable streaming if callbacks exist
+    }
+    # Only include temperature if this model supports it
+    if cfg.get("supports_temperature", False):
+        # clamp to allowed range if you want:
+        lo, hi = cfg.get("min", 0.0), cfg.get("max", 2.0)
+        safe_temp = max(lo, min(temperature, hi))
+        llm_kwargs["temperature"] = safe_temp
+
+    # Attach streaming callback (if/when you enable token streaming with StreamToClientHandler)
+    if callback_manager:
+        llm_kwargs["streaming"] = True
+        llm_kwargs["callback_manager"] = callback_manager
+
+    return ChatOpenAI(**llm_kwargs)
 
 @celery_app.task(bind=True, base=BaseTaskWithRetry)
 def new_chat_session(self, user_id, project_id):
@@ -125,7 +153,7 @@ def new_chat_session(self, user_id, project_id):
         raise self.retry(exc=e)
 
 @celery_app.task(bind=True, base=BaseTaskWithRetry)
-def persist_user_query(self, user_id, chat_session_id, query, project_id, model_type):
+def persist_user_query(self, user_id, chat_session_id, query, project_id, model_name):
     """
     Simple task to persist user query to public.messages in Supabase before performing RAG Q&A
     """
@@ -170,7 +198,7 @@ def rag_chat_task(
     chat_session_id, 
     query, 
     project_id, 
-    model_type,
+    model_name,
 ):
     """
     Main RAG workflow, implementing the standard “optimistic UI” pattern
@@ -191,8 +219,8 @@ def rag_chat_task(
             }
         )
 
-        if model_type == "":
-            model_type="o4-mini"
+        if model_name == "":
+            model_name="o4-mini"
 
         # Step 1) Embed the query using OpenAI Ada embeddings (1536 dims)
         embedding_model = OpenAIEmbeddings(
@@ -209,7 +237,7 @@ def rag_chat_task(
             query,
             chat_session_id,
             relevant_chunks,
-            model_name=model_type  # supports gpt-4o, gemini-flash, deepseek-v3, etc.
+            model_name=model_name  # supports gpt-4o, gemini-flash, deepseek-v3, etc.
         )
 
         # Step 4) insert assistant response
@@ -276,7 +304,7 @@ def generate_rag_answer(query, chat_session_id, relevant_chunks, model_name, max
     llm = get_chat_llm(model_name)
 
     # Streaming prediction: on_llm_new_token fires for each token
-    answer = llm.predict(trimmed_context )
+    answer = llm.predict(trimmed_context)
     return answer
 
 def create_new_conversation(user_id, project_id):
@@ -295,16 +323,6 @@ def save_conversation(chat_session_id, user_id, query, answer):
     """
     Persists user and assistant messages into Supabase public.messages table.
     """
-    # # insert user query
-    # insert_chat_message_supabase_record(
-    #     supabase_client,
-    #     table_name="message",
-    #     user_id=user_id,
-    #     chat_session_id=chat_session_id,
-    #     dialogue_role="user",
-    #     message_content=query,
-    #     created_at=datetime.now(timezone.utc).isoformat()
-    # )
     # insert assistant response
     insert_chat_message_supabase_record(
         supabase_client,
