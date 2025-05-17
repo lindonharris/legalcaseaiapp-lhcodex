@@ -447,7 +447,7 @@ async def rag_chat(request: RagQueryRequest):
     Raw json:
     ----------
     {
-        "user_id": "...",
+        "user_id": "ae3df626-12cc-40c1-9d40-1d8249deea2e",
         "chat_session_id": "...",
         "query": "...",
         "project_id": "...",

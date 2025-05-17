@@ -22,7 +22,7 @@ def create_new_chat_session(
     client, 
     table_name,
     user_id,
-    project_id
+    project_id,
 ):
     '''INSERT/CREATE a new chat_session object table public.chat_sessions'''
     try:
@@ -147,7 +147,7 @@ def insert_chat_message_supabase_record(
             "role": dialogue_role,                              # enum(user, assistant)
             "content": message_content,
             "query_response_status": query_response_status,     # status for SUCCESS or FAILED llm query response
-            "raw_resposne": "",
+            "raw_response": "",
             "created_at": created_at,
         }).execute()
         return response
