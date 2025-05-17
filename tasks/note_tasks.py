@@ -224,7 +224,7 @@ def save_note(
 #     """
 #     Returns ordered list of message dicts for a conversation.
 #     """
-#     response = supabase_client.table("message").select("*").eq("chat_session_id", chat_session_id).order("created_at").execute()
+#     response = supabase_client.table("messages").select("*").eq("chat_session_id", chat_session_id).order("created_at").execute()
 #     return response.data
 
 # def format_chat_history(chat_history):
