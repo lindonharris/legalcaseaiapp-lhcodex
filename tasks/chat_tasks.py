@@ -185,7 +185,7 @@ def rag_chat_task(
             }
         )
 
-        if model_type is "":
+        if model_type == "":
             model_type="gpt-o4-mini"
 
         # Step 1) Embed the query using OpenAI Ada embeddings (1536 dims)
@@ -341,19 +341,13 @@ def format_chat_history(chat_history):
     """
     return "".join(f"{m['role'].capitalize()}: {m['content']}\n" for m in chat_history)
 
+
 def trim_context_length(full_context, query, relevant_chunks, model_name, max_tokens): 
     """
     Iteratively remove chunks until prompt fits within model token limit.
     """
     import tiktoken
-    try:
-        if model_name is "":
-            model_name="gpt-o4-mini"
-    
-        tokenizer = tiktoken.encoding_for_model(model_name)
-    except KeyError:
-        logger.warning(f"Unknown model '{model_name}', falling back to 'cl100k_base' tokenizer")
-        tokenizer = tiktoken.get_encoding("cl100k_base")
+    tokenizer = tiktoken.encoding_for_model(model_name)
     history = full_context
     # While over token budget, drop least relevant chunks
     while len(tokenizer.encode(history)) > max_tokens and relevant_chunks:
@@ -361,3 +355,24 @@ def trim_context_length(full_context, query, relevant_chunks, model_name, max_to
         chunk_context = "\n\n".join(c["content"] for c in relevant_chunks)
         history = f"Relevant Context:\n{chunk_context}\n\nUser Query: {query}\nAssistant:"
     return full_context
+
+# def trim_context_length(full_context, query, relevant_chunks, model_name, max_tokens): 
+#     """
+#     Iteratively remove chunks until prompt fits within model token limit.
+#     """
+#     import tiktoken
+#     try:
+#         if model_name == "":
+#             model_name="gpt-o4-mini"
+    
+#         tokenizer = tiktoken.encoding_for_model(model_name)
+#     except KeyError:
+#         logger.warning(f"Unknown model '{model_name}', falling back to 'cl100k_base' tokenizer")
+#         tokenizer = tiktoken.get_encoding("cl100k_base")
+#     history = full_context
+#     # While over token budget, drop least relevant chunks
+#     while len(tokenizer.encode(history)) > max_tokens and relevant_chunks:
+#         relevant_chunks.pop()
+#         chunk_context = "\n\n".join(c["content"] for c in relevant_chunks)
+#         history = f"Relevant Context:\n{chunk_context}\n\nUser Query: {query}\nAssistant:"
+#     return full_context
