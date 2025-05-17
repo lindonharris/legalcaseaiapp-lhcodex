@@ -142,9 +142,7 @@ def insert_chat_message_supabase_record(
     '''INSERT message into table public.messages'''
     try:
 
-        raw = "raw answer"
-        if isinstance("raw answer", str):
-            raw = json.loads("raw answer")
+        raw = {"raw": "boiler plate"}
 
         response = client.table(table_name).insert({
             "user_id": user_id,
