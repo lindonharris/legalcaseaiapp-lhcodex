@@ -96,9 +96,10 @@ def get_chat_llm(
 
     (default) OpenAI o4-mini model
     """
-    
+
     cfg = _MODEL_TEMPERATURE_CONFIG.get(model_name, {"supports_temperature": True})
     llm_kwargs = {
+        "api_key": OPENAI_API_KEY,
         "model": model_name,
         "streaming": False,     # Disable streaming if callbacks exist
     }
