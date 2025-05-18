@@ -8,22 +8,35 @@ gpt-4.1-nano
 
 '''
 
-from celery import Task
+from celery import Celery, Task
 from tasks.celery_app import celery_app  # Import the Celery app instance (see celery_app.py for LocalHost config)
 import logging
 import os
-import gc
 import redis
+from supabase import create_client, Client
 from utils.supabase_utils import supabase_client, insert_chat_message_supabase_record, create_new_chat_session
 from datetime import datetime, timezone
+import requests
 import tempfile
 import uuid
 import json
 import tiktoken
 from dotenv import load_dotenv
+
+
+# langchain imports
+from langchain_core.load import dumpd
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain.prompts import PromptTemplate
+from langchain.schema import AIMessage
 from langchain.callbacks.base import BaseCallbackHandler
+from langchain.callbacks.manager import CallbackManager
+# from langchain.document_loaders import PyPDFLoader
+from langchain_community.document_loaders import PyPDFLoader
+from langchain.text_splitter import CharacterTextSplitter
 
 #### GLOBAL ####
+
 # API Keys
 load_dotenv()
 OPENAI_API_KEY = os.environ.get("OPENAI_API_PROD_KEY")
@@ -35,6 +48,7 @@ _MODEL_TEMPERATURE_CONFIG = {
     "gpt-4o-mini":  {"supports_temperature": False},
     # temperature-capable models
     "gpt-4.1-nano": {"supports_temperature": True, "min": 0.0, "max": 2.0},
+    # add more entries here as needed...
 }
 
 logger = logging.getLogger(__name__)
@@ -52,13 +66,12 @@ class BaseTaskWithRetry(Task):
     retry_kwargs = {"max_retries": 5}
     retry_jitter = True
 
-
 def publish_token(chat_session_id: str, token: str):
     """
     Stub function to publish a single token to clients subscribed to a chat session.
     Replace with actual pub/sub (e.g. Redis, Supabase Realtime).
     """
-    # Example: redis_sync.publish(f"chat:{chat_session_id}", token)
+    # Example: redis.publish(f"chat:{chat_session_id}", token)
     pass
 
 class StreamToClientHandler(BaseCallbackHandler):
@@ -69,35 +82,35 @@ class StreamToClientHandler(BaseCallbackHandler):
         self.session_id = session_id
 
     def on_llm_new_token(self, token: str, **kwargs) -> None:
+        # Called by LangChain for every new token in streaming mode
         publish_token(self.session_id, token)
-
 
 def get_chat_llm(
     model_name: str = "gpt-4o-mini",
     temperature: float = 0.7,
-    callback_manager: any = None,
-) -> "ChatOpenAI":
+    callback_manager: CallbackManager = None,
+) -> ChatOpenAI:
     """
     Factory to create a ChatOpenAI instance.
     If callback_manager is provided, enable streaming and attach handlers.
 
     (default) OpenAI o4-mini model
     """
-    from langchain_openai import ChatOpenAI     # Lazy-import to reduce startup footprint
 
     cfg = _MODEL_TEMPERATURE_CONFIG.get(model_name, {"supports_temperature": True})
     llm_kwargs = {
         "api_key": OPENAI_API_KEY,
         "model": model_name,
-        "streaming": False,     # Disable streaming by default
+        "streaming": False,     # Disable streaming if callbacks exist
     }
     # Only include temperature if this model supports it
     if cfg.get("supports_temperature", False):
+        # clamp to allowed range if you want:
         lo, hi = cfg.get("min", 0.0), cfg.get("max", 2.0)
         safe_temp = max(lo, min(temperature, hi))
         llm_kwargs["temperature"] = safe_temp
 
-    # Attach streaming callback if provided
+    # Attach streaming callback (if/when you enable token streaming with StreamToClientHandler)
     if callback_manager:
         llm_kwargs["streaming"] = True
         llm_kwargs["callback_manager"] = callback_manager
@@ -123,6 +136,8 @@ def new_chat_session(self, user_id, project_id):
         new_chat_session_id = response.data[0]["id"]
 
         # Step 2) UPDATE/REPLACE public.projects, chat_session_id column
+        # @TODO: I WILL have orphan chats in chat_sessions that need to be cleared out when
+        # the user clears the chat 🔃 session in the UI
         try:
             _ = supabase_client \
             .table("projects") \
@@ -145,8 +160,11 @@ def persist_user_query(self, user_id, chat_session_id, query, project_id, model_
     """
     try:
         # Set explicit start time metadata
+        # This manually sets result = AsyncResult(task_id) when checking on this celery task via job.id
+        # result.state → "PENDING"
+        # result.info → {"start_time": "..."}
         self.update_state(
-            state="STARTED",
+            state="STARTED", # ← using "PENDING" can confuse clients into thinking the task has not started yet
             meta={
                 "start_time": datetime.now(timezone.utc).isoformat()
             }
@@ -164,12 +182,13 @@ def persist_user_query(self, user_id, chat_session_id, query, project_id, model_
             created_at=datetime.now(timezone.utc).isoformat()
         )
 
-        # Step 2) Return inserted record ID for downstream tasks
+        # Step 2) Return completed answer for HTTP response (unpacked in WeWeb)
         inserted_id = response.data[0]["id"]
         return inserted_id
 
     except Exception as e:
         logger.error(f"RAG Chat Task failed: {e}", exc_info=True)
+        # Retry on failure according to BaseTaskWithRetry policies
         raise self.retry(exc=e)
 
 @celery_app.task(bind=True, base=BaseTaskWithRetry)
@@ -187,20 +206,24 @@ def rag_chat_task(
     1. Embed the user query
     2. Fetch top-K relevant chunks
     3. Generate llm_assistant answer
-    4. Persist llm assistant answer in Supabase public.messages table
+    4. Persist llm assistant answer in Supabase public.messages table (retry failure precaution?)
     """
     try:
         # Set explicit start time metadata
+        # This manually sets result = AsyncResult(task_id) when checking on this celery task via job.id
+        # result.state → "PENDING"
+        # result.info → {"start_time": "..."}
         self.update_state(
-            state="STARTED",
-            meta={"start_time": datetime.now(timezone.utc).isoformat()}
+            state="STARTED", # ← using "PENDING" can confuse clients into thinking the task has not started yet
+            meta={
+                "start_time": datetime.now(timezone.utc).isoformat()
+            }
         )
 
-        if not model_name:
-            model_name = "o4-mini"
+        if model_name == "":
+            model_name="o4-mini"
 
-        # Step 1) Embed the query
-        from langchain_openai import OpenAIEmbeddings       # Lazy-import heavy modules
+        # Step 1) Embed the query using OpenAI Ada embeddings (1536 dims)
         embedding_model = OpenAIEmbeddings(
             model="text-embedding-ada-002",
             api_key=OPENAI_API_KEY,
@@ -210,15 +233,15 @@ def rag_chat_task(
         # Step 2) Fetch top-K relevant chunks via Supabase RPC
         relevant_chunks = fetch_relevant_chunks(query_embedding, project_id)
 
-        # Step 3) Generate answer for client
+        # Step 3) Generation answer for client (@TODO may be used to token streaming at a later point )
         assistant_response = generate_rag_answer(
             query,
             chat_session_id,
             relevant_chunks,
-            model_name=model_name
+            model_name=model_name  # supports gpt-4o, gemini-flash, deepseek-v3, etc.
         )
 
-        # Step 4) Insert assistant response
+        # Step 4) insert assistant response
         _ = insert_chat_message_supabase_record(
             supabase_client,
             table_name="messages",
@@ -230,28 +253,21 @@ def rag_chat_task(
             created_at=datetime.now(timezone.utc).isoformat()
         )
 
-        # Step 5) UPDATE public.messages status
+        # Step 5) UPDATE public.messages column ???????
         try:
             _ = supabase_client \
-                .table("messages") \
-                .update({"query_response_status": "COMPLETE"}) \
-                .eq("id", message_id) \
-                .execute()
+            .table("messages") \
+            .update({"query_response_status": "COMPLETE"}) \
+            .eq("id", message_id) \
+            .execute()
         except Exception as e:
             raise Exception(f"Error updating public.messages status: {e}")
+        return None
 
     except Exception as e:
         logger.error(f"RAG Chat Task failed: {e}", exc_info=True)
+        # Retry on failure according to BaseTaskWithRetry policies
         raise self.retry(exc=e)
-    else:
-        # Cleanup large in-memory objects
-        try:
-            del query_embedding, relevant_chunks, assistant_response
-        except NameError:
-            pass
-        gc.collect()
-        return None
-
 
 def fetch_relevant_chunks(query_embedding, project_id, match_count=10):
     """
@@ -268,13 +284,11 @@ def fetch_relevant_chunks(query_embedding, project_id, match_count=10):
         logger.error(f"Error fetching relevant chunks: {e}", exc_info=True)
         raise
 
-
 def generate_rag_answer(query, chat_session_id, relevant_chunks, model_name, max_chat_history=10):
     """
-    Build prompt, invoke LLM, return the full generated answer at completion.
+    Build prompt, invoke streaming LLM, publish tokens in real-time,
+    and return the full generated answer at completion.
     """
-    from langchain_openai import ChatOpenAI     # Lazy-import heavy modules
-    
     # Build conversational context
     chat_history = fetch_chat_history(chat_session_id)[-max_chat_history:]
     formatted_history = format_chat_history(chat_history) if chat_history else ""
@@ -283,46 +297,110 @@ def generate_rag_answer(query, chat_session_id, relevant_chunks, model_name, max
         f"{formatted_history}\n\nRelevant Context:\n{chunk_context}\n\n"
         f"User Query: {query}\nAssistant:"
     )
-    trimmed_context = trim_context_length(
-        full_context, query, relevant_chunks, model_name, max_tokens=127999
-    )
+    trimmed_context  = trim_context_length(full_context, query, relevant_chunks, model_name, max_tokens=127999)
 
+    # Set up streaming callback for token-level pushes
+    # handler = StreamToClientHandler(chat_session_id)                     # Disabled, no token streaming
+    # cb_manager = CallbackManager([handler])                              # Disabled, no token streaming
     llm = get_chat_llm(model_name)
+
+    # Streaming prediction: on_llm_new_token fires for each token
     answer = llm.predict(trimmed_context)
     return answer
 
-# Other helper functions unchanged
+def create_new_conversation(user_id, project_id):
+    """
+    Inserts a new row into chat_session and returns its UUID.
+    """
+    new_chat_session = {
+        "user_id": user_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "project_id": project_id
+    }
+    response = supabase_client.table("chat_session").insert(new_chat_session).execute()
+    return response.data[0]["id"]
+
+def save_conversation(chat_session_id, user_id, query, answer):
+    """
+    Persists user and assistant messages into Supabase public.messages table.
+    """
+    # insert assistant response
+    insert_chat_message_supabase_record(
+        supabase_client,
+        table_name="messages",
+        user_id=user_id,
+        chat_session_id=chat_session_id,
+        dialogue_role="assistant",
+        message_content=answer,
+        query_response_status="",
+        created_at=datetime.now(timezone.utc).isoformat()
+    )
 
 def fetch_chat_history(chat_session_id):
+    """
+    Returns ordered list of message dicts for a conversation.
+    """
     response = supabase_client.table("messages") \
         .select("*") \
         .eq("chat_session_id", chat_session_id) \
         .order("created_at").execute()
     return response.data
 
-
 def format_chat_history(chat_history):
-    return "".join(f"{m['role'].capitalize()}: {m['content']}\n" for m in chat_history).strip()
-
+    """
+    Converts list of messages to a single string for prompt context.
+    """
+    formatted_string = "".join(f"{m['role'].capitalize()}: {m['content']}\n" for m in chat_history)
+    return formatted_string.strip()
 
 def trim_context_length(full_context, query, relevant_chunks, model_name, max_tokens):
+    """
+    Iteratively remove chunks until prompt fits within model token limit.
+    """
+    # Map custom/internal model names to known tiktoken encoding names
+    # Add mappings for all models you expect to use here
     model_to_encoding = {
-        "o4-mini": "o200k_base",
-        "gpt-4o": "cl100k_base",
+        "o4-mini": "o200k_base", # Assuming o4-mini uses the gpt-4o encoding
+        "gpt-4o": "o200k_base",
         "gpt-4-turbo": "cl100k_base",
         "gpt-4": "cl100k_base",
         "gpt-3.5-turbo": "cl100k_base",
         "text-embedding-ada-002": "cl100k_base",
+        # Add other mappings if you use different models (e.g., for Claude, etc.)
+        # Note: Non-OpenAI models might require different tokenization libraries or approaches.
+        # This mapping works ONLY for models using tiktoken encodings.
     }
-    encoding_name = model_to_encoding.get(model_name, "cl100k_base")
+
+    # Get the encoding name based on the model_name.
+    # Provide a fallback (like 'cl100k_base') or raise an error if the model name is not in the map.
+    encoding_name = model_to_encoding.get(model_name)
+
+    if not encoding_name:
+        logger.warning(f"Unknown model name '{model_name}'. Cannot determine tiktoken encoding. Using fallback 'cl100k_base'.")
+        encoding_name = "cl100k_base" # Fallback to a common encoding
+
     try:
+        # Use get_encoding with the determined encoding name
         tokenizer = tiktoken.get_encoding(encoding_name)
-    except Exception:
+    except ValueError:
+        logger.error(f"Failed to get tiktoken encoding for name '{encoding_name}' (mapped from model '{model_name}'). Falling back to 'cl100k_base'.")
+        # Fallback if the mapped encoding name is itself invalid
         tokenizer = tiktoken.get_encoding("cl100k_base")
 
-    history = full_context
+
+    history = full_context # Initialize token calculation with the full context string
+
+    # Note: The original loop logic here modifies relevant_chunks and recalculates 'history'
+    # based on chunks and query. However, the function *returns* the original
+    # 'full_context' string, making the trimming ineffective as written in the original code.
+    # This fix addresses the tiktoken error but does not correct this potential logic bug
+    # in how the trimmed context is returned.
     while len(tokenizer.encode(history)) > max_tokens and relevant_chunks:
-        relevant_chunks.pop()
+        relevant_chunks.pop() # Remove the least relevant chunk
+
+        # Rebuild the string used for token counting in the loop.
         chunk_context = "\n\n".join(c["content"] for c in relevant_chunks)
         history = f"Relevant Context:\n{chunk_context}\n\nUser Query: {query}\nAssistant:"
+
     return history
+
