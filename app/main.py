@@ -102,6 +102,9 @@ class PDFResponse(BaseModel):
     audio_task_id: str
     embedding_task_id: str
 
+class GenericTaskResponse(BaseModel):
+    task_id: str
+
 # <---- Models for new RAG pipeline kickoff  ----> #
 class NewRagPipelineRequest(BaseModel):
     ''' 
@@ -379,9 +382,9 @@ async def create_new_rag_project_and_gen_notes(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/generate-ai-note/", response_model=NewRagAndNoteResponse)
+@app.post("/generate-ai-note/", response_model=GenericTaskResponse)
 async def generate_ai_note(
-    request: NewRagPipelineRequest, 
+    request: NewGeneratedNoteRequest, 
     background_tasks: BackgroundTasks
 ):
     '''

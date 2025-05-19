@@ -156,6 +156,9 @@ def rag_note_task(
         if note_type == "outline":
             query = "Create a comprehensive oputline of the following documents"
 
+        if note_type == "exam-questions":
+            query = "Based on the documents (appended as rag context) create an list of 15 exam questions"
+
         # Step 1) Embed the query using OpenAI Ada embeddings (1536 dims)
         embedding_model = OpenAIEmbeddings(
             model="text-embedding-ada-002",
