@@ -194,6 +194,14 @@ class RagRegenerateRequest(BaseModel):
     project_id: str
     model_name: str
 
+class NewGeneratedNoteRequest(BaseModel):
+    ''' 
+    Pydantic struct for `POST/generate-ai-note/` to kick off of a creation of a New Generate NOte
+    Files → S3/CF upload → Vector embedding
+    '''
+    # files: List[str]  # List of URLs or file paths of the PDFs
+    metadata: Dict[str, Any]  # A dictionary for any metadata information
+
 # ================================================ #
 #                  WEBSOCKETS
 # ================================================ #
@@ -358,15 +366,50 @@ async def create_new_rag_project_and_gen_notes(
         workflow = chain(
             process_pdf_task.s(request.files, request.metadata),
             rag_note_task.s(
-                request.metadata["user_id"],
-                request.metadata["chat_session_id"],
-                request.metadata["summary_query"],  # e.g. your custom "Based on the docs…" prompt
-                request.metadata["project_id"],
-                request.metadata["model_name"]
+                request.metadata["user_id"],            # ← 
+                request.metadata["chat_session_id"],    # ← 
+                request.metadata["note_type"],          # ← maps to note_type (e.g. "create an pros/cons outline of this case…")
+                request.metadata["project_id"],         # ← 
+                request.metadata["model_name"]          # ← 
             )
         )
         result: AsyncResult = workflow.apply_async()
         return {"workflow_id": result.id}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/generate-ai-note/", response_model=NewRagAndNoteResponse)
+async def generate_ai_note(
+    request: NewRagPipelineRequest, 
+    background_tasks: BackgroundTasks
+):
+    '''
+    Endpoint to generate note for an EXISTING project
+        - rag_note_task():
+            input: request.metadata
+            returns: None
+        
+    Request contains:
+        request.files (List): list of pdf file links
+        request.metadata (json): {
+            project_id:,
+            chat_session_id:,
+            ...
+            model_name
+        }
+    '''
+    try:
+        # Apply async job to generate ai notes (grounded w/ RAG)
+        job = rag_note_task.apply_async(    
+            kwargs={
+                "user_id":       request.metadata["user_id"],       # ← maps to your user_id param
+                "note_type":     request.metadata["note_type"],     # ← maps to your note_type param
+                "project_id":    request.metadata["project_id"],    # ← maps to your project_id param  
+                "model_name":    request.metadata["model_name"],    # ← maps to your model_name param
+        }
+    )
+        return {"workflow_id": job.id}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

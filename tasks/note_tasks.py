@@ -29,10 +29,21 @@ from langchain.callbacks.manager import CallbackManager
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import CharacterTextSplitter
 
+#### GLOBAL ####
 # API Keys
 load_dotenv()
 OPENAI_API_KEY = os.environ.get("OPENAI_API_PROD_KEY")
 
+# Define which models support temp (and their allowed ranges, if you like)
+_MODEL_TEMPERATURE_CONFIG = {
+    # no-temperature models
+    "o4-mini":      {"supports_temperature": False},
+    "gpt-4o-mini":  {"supports_temperature": False},
+    # temperature-capable models
+    "gpt-4.1-nano": {"supports_temperature": True, "min": 0.0, "max": 2.0},
+}
+
+# Logging
 logger = logging.getLogger(__name__)
 
 # Initialize Redis sync client for pub/sub
@@ -68,28 +79,60 @@ class StreamToClientHandler(BaseCallbackHandler):
         publish_token(self.session_id, token)
 
 def get_chat_llm(
-        model_name: str = "gpt-4o-mini", 
-        callback_manager: CallbackManager = None
-) -> ChatOpenAI:
+    model_name: str = "gpt-4o-mini",
+    temperature: float = 0.7,
+    callback_manager: any = None,
+) -> "ChatOpenAI":
     """
     Factory to create a ChatOpenAI instance.
     If callback_manager is provided, enable streaming and attach handlers.
 
-    (default) OpenAI gpt-4o-mini model
+    (default) OpenAI o4-mini model
     """
-    return ChatOpenAI(
-        model=model_name,
-        api_key=OPENAI_API_KEY,           # ← supply your key here
-        temperature=0.7,
-        streaming=False,                            # Disable streaming if callbacks exist
-        callback_manager=None                       # attaches our StreamToClientHandler
-    )
+    from langchain_openai import ChatOpenAI     # Lazy-import to reduce startup footprint
+
+    cfg = _MODEL_TEMPERATURE_CONFIG.get(model_name, {"supports_temperature": True})
+    llm_kwargs = {
+        "api_key": OPENAI_API_KEY,
+        "model": model_name,
+        "streaming": False,     # Disable streaming by default
+    }
+    # Only include temperature if this model supports it
+    if cfg.get("supports_temperature", False):
+        lo, hi = cfg.get("min", 0.0), cfg.get("max", 2.0)
+        safe_temp = max(lo, min(temperature, hi))
+        llm_kwargs["temperature"] = safe_temp
+
+    # Attach streaming callback if provided
+    if callback_manager:
+        llm_kwargs["streaming"] = True
+        llm_kwargs["callback_manager"] = callback_manager
+
+    return ChatOpenAI(**llm_kwargs)
+
+# def get_chat_llm(
+#         model_name: str = "gpt-4o-mini", 
+#         callback_manager: CallbackManager = None
+# ) -> ChatOpenAI:
+#     """
+#     Factory to create a ChatOpenAI instance.
+#     If callback_manager is provided, enable streaming and attach handlers.
+
+#     (default) OpenAI gpt-4o-mini model
+#     """
+#     return ChatOpenAI(
+#         model=model_name,
+#         api_key=OPENAI_API_KEY,         # ← supply your key here
+#         temperature=0.7,
+#         streaming=False,                # Disable streaming if callbacks exist
+#         callback_manager=None           # attaches our StreamToClientHandler
+#     )
 
 @celery_app.task(bind=True, base=BaseTaskWithRetry)
 def rag_note_task(
     self, 
     user_id, 
-    note_type,          # ← note_type here
+    note_type, 
     project_id, 
     model_name
 ):
@@ -101,7 +144,7 @@ def rag_note_task(
     4. Persist query and answer in Supabase
     """
     try:
-        # Set explicit start time metadata
+        # Set explicit start time in self.metadata
         # This manually sets result = AsyncResult(task_id) when checking on this celery task via job.id
         # result.state → "PENDING"
         # result.info → {"start_time": "..."}
@@ -190,7 +233,7 @@ def generate_rag_answer(query, relevant_chunks, model_name, max_chat_history=10)
 
 def create_new_conversation(user_id, project_id):
     """
-    Inserts a new row into chat_session and returns its UUID.
+    Inserts a new row into chat_session and returns its UUID... for now not in use (using WeWeb to insert a new convo)
     """
     new_chat_session = {
         "user_id": user_id,
@@ -199,6 +242,72 @@ def create_new_conversation(user_id, project_id):
     }
     response = supabase_client.table("chat_session").insert(new_chat_session).execute()
     return response.data[0]["id"]
+
+def restart_conversation(user_id: str, project_id: str) -> str:
+    """
+    Creates a new chat session in public.chat_sessions, updates the 
+    chat_session_id in public.projects, then deletes the old session.
+    
+    Returns the new chat_session_id.
+    """
+    # 1) Fetch the old session id for this project
+    proj_res = (
+        supabase_client
+        .table("projects")
+        .select("chat_session_id")
+        .eq("id", project_id)
+        .single()
+        .execute()
+    )
+    if proj_res.error:
+        raise RuntimeError(f"Error fetching project: {proj_res.error.message}")
+    
+    old_session_id = proj_res.data["chat_session_id"]
+    
+    # 2) Insert a new chat_sessions row
+    new_chat_session = {
+        "user_id": user_id,
+        "project_id": project_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    insert_res = (
+        supabase_client
+        .table("chat_sessions")
+        .insert(new_chat_session)
+        .execute()
+    )
+    if insert_res.error:
+        raise RuntimeError(f"Error creating chat session: {insert_res.error.message}")
+    
+    # Supabase returns a list of inserted rows
+    new_session_id = insert_res.data[0]["id"]
+    
+    # 3) Update the project to point to the new session
+    update_res = (
+        supabase_client
+        .table("projects")
+        .update({"chat_session_id": new_session_id})
+        .eq("id", project_id)
+        .execute()
+    )
+    if update_res.error:
+        raise RuntimeError(f"Error updating project: {update_res.error.message}")
+    
+    # 4) Delete the old chat session
+    #    (only if it existed in the first place)
+    if old_session_id:
+        delete_res = (
+            supabase_client
+            .table("chat_sessions")
+            .delete()
+            .eq("id", old_session_id)
+            .execute()
+        )
+        if delete_res.error:
+            raise RuntimeError(f"Error deleting old session: {delete_res.error.message}")
+    
+    return new_session_id
+
 
 def save_note(
         project_id, 
