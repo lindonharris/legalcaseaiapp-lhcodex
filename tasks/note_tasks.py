@@ -12,6 +12,7 @@ import redis
 from supabase import create_client, Client
 from utils.supabase_utils import insert_note_supabase_record, supabase_client
 from datetime import datetime, timezone
+import tiktoken
 import requests
 import tempfile
 import uuid
@@ -345,16 +346,24 @@ def save_note(
 #     """
 #     return "".join(f"{m['message_role'].capitalize()}: {m['message_content']}\n" for m in chat_history)
 
-def trim_context_length(full_context, query, relevant_chunks, model_name, max_tokens): 
-    """
-    Iteratively remove chunks until prompt fits within model token limit.
-    """
-    import tiktoken
-    tokenizer = tiktoken.encoding_for_model(model_name)
+def trim_context_length(full_context, query, relevant_chunks, model_name, max_tokens):
+    model_to_encoding = {
+        "o4-mini": "o200k_base",
+        "gpt-4o": "cl100k_base",
+        "gpt-4-turbo": "cl100k_base",
+        "gpt-4": "cl100k_base",
+        "gpt-3.5-turbo": "cl100k_base",
+        "text-embedding-ada-002": "cl100k_base",
+    }
+    encoding_name = model_to_encoding.get(model_name, "cl100k_base")
+    try:
+        tokenizer = tiktoken.get_encoding(encoding_name)
+    except Exception:
+        tokenizer = tiktoken.get_encoding("cl100k_base")
+
     history = full_context
-    # While over token budget, drop least relevant chunks
     while len(tokenizer.encode(history)) > max_tokens and relevant_chunks:
         relevant_chunks.pop()
         chunk_context = "\n\n".join(c["content"] for c in relevant_chunks)
         history = f"Relevant Context:\n{chunk_context}\n\nUser Query: {query}\nAssistant:"
-    return full_context
+    return history
