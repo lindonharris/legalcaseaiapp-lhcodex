@@ -412,7 +412,7 @@ async def generate_ai_note(
                 "model_name":    request.metadata["model_name"],    # ← maps to your model_name param
         }
     )
-        return {"workflow_id": job.id}
+        return {"task_id": job.id}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
