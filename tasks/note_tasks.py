@@ -220,6 +220,10 @@ def generate_rag_answer(query, relevant_chunks, model_name, max_chat_history=10)
         f"User Query: {query}\nAssistant:"
     )
     full_context = trim_context_length(full_context, query, relevant_chunks, model_name, max_tokens=127999)
+    
+    # Use spawn context to allow child processes from daemon workers
+    ctx = mp.get_context('spawn')
+    queue = ctx.Queue()
 
     # Run the LLM call in a separate process to catch OOM kills
     def worker_fn(queue, context, model_name):
@@ -233,12 +237,12 @@ def generate_rag_answer(query, relevant_chunks, model_name, max_chat_history=10)
         except Exception:
             queue.put(("ERROR", traceback.format_exc()))
 
-    queue = mp.Queue()
-    p = mp.Process(target=worker_fn, args=(queue, full_context, model_name))
+    p = ctx.Process(target=worker_fn, args=(queue, full_context, model_name))
+    p.daemon = False
     p.start()
     p.join()
 
-    # If the child was killed by SIGKILL (OOM), exitcode will be 9
+    # Check for OOM kill (SIGKILL exitcode 9)
     if p.exitcode == 9:
         raise RuntimeError("Child LLM process was OOM-killed (exit code 9)")
 
