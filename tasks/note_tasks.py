@@ -2,7 +2,8 @@
 This file runs Celery tasks for handling RAG AI note creation tasks (outlines, summaries, compare-contrast)
 Note genereation (with RAG) is done without token streaming. Returns full answer in one go.
 '''
-
+import multiprocessing as mp
+import traceback
 from celery import Celery, Task
 from celery.exceptions import MaxRetriesExceededError
 from tasks.celery_app import celery_app  # Import the Celery app instance (see celery_app.py for LocalHost config)
@@ -212,13 +213,7 @@ def fetch_relevant_chunks(query_embedding, project_id, match_count=10):
         raise
 
 def generate_rag_answer(query, relevant_chunks, model_name, max_chat_history=10):
-    """
-    Build prompt, invoke streaming LLM, publish tokens in real-time,
-    and return the full generated answer at completion.
-    """
-    # Build conversational context
-    # chat_history = fetch_chat_history(chat_session_id)[-max_chat_history:]
-    # formatted_history = format_chat_history(chat_history) if chat_history else ""
+    # Build conversational context as before
     chunk_context = "\n\n".join(c["content"] for c in relevant_chunks)
     full_context = (
         f"Relevant Context:\n{chunk_context}\n\n"
@@ -226,14 +221,59 @@ def generate_rag_answer(query, relevant_chunks, model_name, max_chat_history=10)
     )
     full_context = trim_context_length(full_context, query, relevant_chunks, model_name, max_tokens=127999)
 
-    # Set up streaming callback for token-level pushes
-    # handler = StreamToClientHandler(chat_session_id)                     # Disabled, no token streaming
-    # cb_manager = CallbackManager([handler])                              # Disabled, no token streaming
-    llm = get_chat_llm(model_name)
+    # Run the LLM call in a separate process to catch OOM kills
+    def worker_fn(queue, context, model_name):
+        try:
+            # Set up streaming callback for token-level pushes
+            # handler = StreamToClientHandler(chat_session_id)                     # Disabled, no token streaming
+            # cb_manager = CallbackManager([handler])                              # Disabled, no token streaming
+            llm = get_chat_llm(model_name)
+            answer = llm.predict(context)
+            queue.put(("RESULT", answer))
+        except Exception:
+            queue.put(("ERROR", traceback.format_exc()))
 
-    # Streaming prediction: on_llm_new_token fires for each token
-    answer = llm.predict(full_context)
-    return answer
+    queue = mp.Queue()
+    p = mp.Process(target=worker_fn, args=(queue, full_context, model_name))
+    p.start()
+    p.join()
+
+    # If the child was killed by SIGKILL (OOM), exitcode will be 9
+    if p.exitcode == 9:
+        raise RuntimeError("Child LLM process was OOM-killed (exit code 9)")
+
+    if not queue.empty():
+        kind, payload = queue.get()
+        if kind == "ERROR":
+            raise RuntimeError(f"LLM subprocess error:\n{payload}")
+        if kind == "RESULT":
+            return payload
+
+    raise RuntimeError("LLM subprocess failed without returning a result")
+
+# def generate_rag_answer(query, relevant_chunks, model_name, max_chat_history=10):
+#     """
+#     Build prompt, invoke streaming LLM, publish tokens in real-time,
+#     and return the full generated answer at completion.
+#     """
+#     # Build conversational context
+#     # chat_history = fetch_chat_history(chat_session_id)[-max_chat_history:]
+#     # formatted_history = format_chat_history(chat_history) if chat_history else ""
+#     chunk_context = "\n\n".join(c["content"] for c in relevant_chunks)
+#     full_context = (
+#         f"Relevant Context:\n{chunk_context}\n\n"
+#         f"User Query: {query}\nAssistant:"
+#     )
+#     full_context = trim_context_length(full_context, query, relevant_chunks, model_name, max_tokens=127999)
+
+#     # Set up streaming callback for token-level pushes
+#     # handler = StreamToClientHandler(chat_session_id)                     # Disabled, no token streaming
+#     # cb_manager = CallbackManager([handler])                              # Disabled, no token streaming
+#     llm = get_chat_llm(model_name)
+
+#     # Streaming prediction: on_llm_new_token fires for each token
+#     answer = llm.predict(full_context)
+#     return answer
 
 def create_new_conversation(user_id, project_id):
     """
