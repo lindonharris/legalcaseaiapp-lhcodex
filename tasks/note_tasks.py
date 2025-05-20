@@ -5,7 +5,7 @@ Note genereation (with RAG) is done without token streaming. Returns full answer
 import multiprocessing as mp
 import traceback
 from celery import Celery, Task
-from celery.exceptions import MaxRetriesExceededError
+from celery.exceptions import MaxRetriesExceededError, TimeoutError
 from tasks.celery_app import celery_app  # Import the Celery app instance (see celery_app.py for LocalHost config)
 import logging
 import os
@@ -112,24 +112,78 @@ def get_chat_llm(
 
     return ChatOpenAI(**llm_kwargs)
 
-# def get_chat_llm(
-#         model_name: str = "gpt-4o-mini", 
-#         callback_manager: CallbackManager = None
-# ) -> ChatOpenAI:
+# @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
+# def llm_prediction_task(self, context, model_name):
 #     """
-#     Factory to create a ChatOpenAI instance.
-#     If callback_manager is provided, enable streaming and attach handlers.
+#     FROM GEMINI-Flash for SIGKILL-9 errors
+#     Celery task to perform the LLM prediction.
+#     Runs in its own process, isolated from the calling task.
+#     """
+#     print(f"llm_prediction_task started for model: {model_name}")
+#     try:
+#         # Set up streaming callback for token-level pushes (if needed)
+#         # handler = StreamToClientHandler(chat_session_id) # Disabled, no token streaming
+#         # cb_manager = CallbackManager([handler])          # Disabled, no token streaming
 
-#     (default) OpenAI gpt-4o-mini model
+#         llm = get_chat_llm(model_name)
+#         answer = llm.predict(context)
+
+#         print("llm_prediction_task finished successfully.")
+#         return answer # Celery task returns the result
+#     except Exception as e:
+#         print(f"llm_prediction_task encountered an error: {e}")
+#         # Log the exception and potentially retry the task
+#         # traceback.print_exc() # Uncomment for detailed logging
+#         raise self.retry(exc=e) # Use Celery's retry mechanism
+    
+# def generate_rag_answer(query, relevant_chunks, model_name, max_chat_history=10):
 #     """
-#     return ChatOpenAI(
-#         model=model_name,
-#         api_key=OPENAI_API_KEY,         # ← supply your key here
-#         temperature=0.7,
-#         streaming=False,                # Disable streaming if callbacks exist
-#         callback_manager=None           # attaches our StreamToClientHandler
+#     FROM GEMINI-Flash for SIGKILL-9 errors
+#     Generates a RAG answer by dispatching the LLM call to a Celery task.
+#     Waits for the result of the LLM task.
+#     """
+#     # Build conversational context as before
+#     chunk_context = "\n\n".join(c["content"] for c in relevant_chunks)
+#     full_context = (
+#         f"Relevant Context:\n{chunk_context}\n\n"
+#         f"User Query: {query}\nAssistant:"
 #     )
+#     # Ensure context is trimmed before sending to the LLM task
+#     full_context = trim_context_length(full_context, query, relevant_chunks, model_name, max_tokens=127999)
 
+#     print("Dispatching llm_prediction_task...")
+#     # Dispatch the LLM call to the separate Celery task
+#     # .delay() is a shortcut for .apply_async()
+#     llm_result_async = llm_prediction_task.delay(full_context, model_name)
+
+#     print(f"Waiting for llm_prediction_task result (Task ID: {llm_result_async.id})...")
+#     try:
+#         # Wait for the result of the LLM task.
+#         # This call will block the current worker process until the LLM task completes,
+#         # times out, or fails.
+#         # You should add a reasonable timeout.
+#         full_answer = llm_result_async.get(timeout=300) # Wait up to 300 seconds
+
+#         print("Received result from llm_prediction_task.")
+#         return full_answer
+
+#     except TimeoutError:
+#         # This exception is raised if the .get() call times out.
+#         # This could indicate the LLM task is stuck or potentially OOM-killed
+#         # before it could return a result within the timeout.
+#         print(f"Timeout waiting for LLM task {llm_result_async.id}. Possible OOM-kill or hang.")
+#         # You might want to inspect the task state here if your backend supports it
+#         # state = llm_result_async.state
+#         # info = llm_result_async.info
+#         raise RuntimeError(f"LLM prediction task timed out (Task ID: {llm_result_async.id}).")
+
+#     except Exception as e:
+#         # Catch other exceptions that might occur while getting the result,
+#         # including exceptions propagated from the llm_prediction_task itself.
+#         print(f"Error retrieving result from LLM task {llm_result_async.id}: {e}")
+#         # traceback.print_exc() # Uncomment for detailed logging
+#         raise RuntimeError(f"LLM subprocess failed (Task ID: {llm_result_async.id}): {e}")
+    
 @celery_app.task(bind=True, base=BaseTaskWithRetry)
 def rag_note_task(
     self, 
@@ -213,71 +267,28 @@ def fetch_relevant_chunks(query_embedding, project_id, match_count=10):
         raise
 
 def generate_rag_answer(query, relevant_chunks, model_name, max_chat_history=10):
-    # Build conversational context as before
+    """
+    Build prompt, invoke streaming LLM, publish tokens in real-time,
+    and return the full generated answer at completion.
+    """
+    # Build conversational context
+    # chat_history = fetch_chat_history(chat_session_id)[-max_chat_history:]
+    # formatted_history = format_chat_history(chat_history) if chat_history else ""
     chunk_context = "\n\n".join(c["content"] for c in relevant_chunks)
     full_context = (
         f"Relevant Context:\n{chunk_context}\n\n"
         f"User Query: {query}\nAssistant:"
     )
     full_context = trim_context_length(full_context, query, relevant_chunks, model_name, max_tokens=127999)
-    
-    # Use spawn context to allow child processes from daemon workers
-    ctx = mp.get_context('spawn')
-    queue = ctx.Queue()
 
-    # Run the LLM call in a separate process to catch OOM kills
-    def worker_fn(queue, context, model_name):
-        try:
-            # Set up streaming callback for token-level pushes
-            # handler = StreamToClientHandler(chat_session_id)                     # Disabled, no token streaming
-            # cb_manager = CallbackManager([handler])                              # Disabled, no token streaming
-            llm = get_chat_llm(model_name)
-            answer = llm.predict(context)
-            queue.put(("RESULT", answer))
-        except Exception:
-            queue.put(("ERROR", traceback.format_exc()))
+    # Set up streaming callback for token-level pushes
+    # handler = StreamToClientHandler(chat_session_id)                     # Disabled, no token streaming
+    # cb_manager = CallbackManager([handler])                              # Disabled, no token streaming
+    llm = get_chat_llm(model_name)
 
-    p = ctx.Process(target=worker_fn, args=(queue, full_context, model_name))
-    p.daemon = False
-    p.start()
-    p.join()
-
-    # Check for OOM kill (SIGKILL exitcode 9)
-    if p.exitcode == 9:
-        raise RuntimeError("Child LLM process was OOM-killed (exit code 9)")
-
-    if not queue.empty():
-        kind, payload = queue.get()
-        if kind == "ERROR":
-            raise RuntimeError(f"LLM subprocess error:\n{payload}")
-        if kind == "RESULT":
-            return payload
-
-    raise RuntimeError("LLM subprocess failed without returning a result")
-
-# def generate_rag_answer(query, relevant_chunks, model_name, max_chat_history=10):
-#     """
-#     Build prompt, invoke streaming LLM, publish tokens in real-time,
-#     and return the full generated answer at completion.
-#     """
-#     # Build conversational context
-#     # chat_history = fetch_chat_history(chat_session_id)[-max_chat_history:]
-#     # formatted_history = format_chat_history(chat_history) if chat_history else ""
-#     chunk_context = "\n\n".join(c["content"] for c in relevant_chunks)
-#     full_context = (
-#         f"Relevant Context:\n{chunk_context}\n\n"
-#         f"User Query: {query}\nAssistant:"
-#     )
-#     full_context = trim_context_length(full_context, query, relevant_chunks, model_name, max_tokens=127999)
-
-#     # Set up streaming callback for token-level pushes
-#     # handler = StreamToClientHandler(chat_session_id)                     # Disabled, no token streaming
-#     # cb_manager = CallbackManager([handler])                              # Disabled, no token streaming
-#     llm = get_chat_llm(model_name)
-
-#     # Streaming prediction: on_llm_new_token fires for each token
-#     answer = llm.predict(full_context)
-#     return answer
+    # Streaming prediction: on_llm_new_token fires for each token
+    answer = llm.predict(full_context)
+    return answer
 
 def create_new_conversation(user_id, project_id):
     """
