@@ -756,9 +756,24 @@ def chunk_and_embed_task(self, pdf_url, source_id, project_id, chunk_size=1000, 
                 "project_id": str(project_id)   # Enforce type check
             })
 
+        # 5.1) Build rows for bulk insert
+        def _clean(s: str) -> str:
+            # remove literal NULLs
+            return s.replace('\x00', '')
+
+        for text, meta, vector in zip(texts, metadatas, embeddings):
+            clean_text = _clean(text)
+            vector_rows.append({
+                "source_id":    str(source_id),
+                "content":      clean_text,
+                "metadata":     meta,
+                "embedding":    vector,
+                "project_id":   str(project_id)
+            })
+
         # 6) Bulk insert into Supabase
         logger.debug("Attempting Supabase bulk vector insert into public.document_vector_store.")
-        resp = supabase_client.table("document_vector_store") \
+        response = supabase_client.table("document_vector_store") \
                             .insert(vector_rows) \
                             .execute()
         # Update status to COMPLETE after successful vector insert

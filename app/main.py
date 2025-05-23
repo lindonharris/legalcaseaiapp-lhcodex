@@ -311,6 +311,11 @@ async def create_new_rag_project(
             model_name: string (optional) 
             note_type: string
         }
+
+    Results contains:
+        {
+            "embedding_task_id": "697778b0-b441-4fd..."
+        }
     '''
     try:
         # Log request information
@@ -573,7 +578,6 @@ async def rag_chat_regenerate(request: RagRegenerateRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-
 @app.post("/rag-chat-stream/regenerate/")
 async def rag_chat_stream_regenerate(request: RagQueryRequest):
     """@TODO Endpoint for regenerating a failed RAG query (token streaming IS ENABLED), still a WORK IN PROGRESS !!! """
@@ -591,7 +595,6 @@ async def rag_chat_stream_regenerate(request: RagQueryRequest):
         return {"task_id": task.id}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-
 
 @app.get("/pdf-upload-task-status/{task_id}")
 async def get_pdf_upload_status(task_id: str):
