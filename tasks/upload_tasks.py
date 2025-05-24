@@ -698,7 +698,7 @@ def process_pdf_task_no_chord(self, files, metadata=None):
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
 def chunk_and_embed_task(self, pdf_url, source_id, project_id, chunk_size=1000, chunk_overlap=100):
     """
-    Celery task to download, chunk, embed, and store embeddings of a PDF in Supabase. This step involved reading 
+    Celery task to download, chunk, embed, and store embeddings of a PDF in Supabase. This step involved reading
     the PDF contents with PyPDFLoader, but will need to be expanded to handle (.doc, .txt, .pdf (OCR), and .epub)
     """
     temp_file = None
@@ -740,33 +740,32 @@ def chunk_and_embed_task(self, pdf_url, source_id, project_id, chunk_size=1000, 
 
         # Guard against any mis-shaped vector dimensions
         expected_embedding_length = 1536   # ada-002 produces 1536 dimensions
-        for i, vec in enumerate(embeddings):  
-            
+        for i, vec in enumerate(embeddings):
             if len(vec) != expected_embedding_length:
                 raise ValueError(f"Embedding #{i} has length {len(vec)}; expected {expected_embedding_length}")
 
         # 5) Build rows for bulk insert
-        vector_rows = []
-        for text, meta, vector in zip(texts, metadatas, embeddings):
-            vector_rows.append({
-                "source_id": str(source_id),    # Enforce type check
-                "content": text,
-                "metadata": meta,
-                "embedding": vector,
-                "project_id": str(project_id)   # Enforce type check
-            })
-
-        # 5.1) Build rows for bulk insert
         def _clean(s: str) -> str:
-            # remove literal NULLs
+            # remove literal NULLs and other problematic control characters if needed
+            # For this specific error, '\x00' is the key.
             return s.replace('\x00', '')
 
+        vector_rows = []
         for text, meta, vector in zip(texts, metadatas, embeddings):
             clean_text = _clean(text)
+            
+            # Clean metadata values that are strings
+            clean_meta = {}
+            for k, v in meta.items():
+                if isinstance(v, str):
+                    clean_meta[k] = _clean(v)
+                else:
+                    clean_meta[k] = v
+
             vector_rows.append({
                 "source_id":    str(source_id),
                 "content":      clean_text,
-                "metadata":     meta,
+                "metadata":     clean_meta,  # Use the cleaned metadata
                 "embedding":    vector,
                 "project_id":   str(project_id)
             })
@@ -797,7 +796,7 @@ def chunk_and_embed_task(self, pdf_url, source_id, project_id, chunk_size=1000, 
                 os.unlink(temp_file.name)
             except OSError:
                 pass
-    
+
     return None
 
 @celery_app.task(bind=True)
