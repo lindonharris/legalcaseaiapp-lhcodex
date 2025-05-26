@@ -3,6 +3,7 @@ Main FastAPI script, this is the heart of the web service
 '''
 
 import os
+import re       # regex
 from dotenv import load_dotenv
 from pydantic import BaseModel
 from datetime import datetime, timezone
@@ -49,9 +50,16 @@ origins = [
     # Add other domains as needed
 ]
 
+# Using a regex to allow any subdomain of weweb-preview.io
+# The .* matches any characters (the subdomain)
+# The \. escapes the dot
+# The $ asserts the end of the string
+origins_regex = r"https://.*\.weweb-preview\.io$"
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
+    allow_origin_regex=origins_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
