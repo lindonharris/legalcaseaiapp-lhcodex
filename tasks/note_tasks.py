@@ -215,6 +215,9 @@ def rag_note_task(
         if note_type == "exam-questions":
             query = "Based on the documents (appended as rag context) create an list of 15 exam questions"
 
+        if note_type == "exam_questions":
+            query = "Based on the documents (appended as rag context) create an list of 15 exam questions"
+
         if note_type == "case_brief":
             query = "Based on the documents create a comprehensive case brief"
 
