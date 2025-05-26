@@ -384,316 +384,316 @@ def process_pdf_task(self, files, metadata=None):
                 f"[CELERY] process_pdf_task failed permanently after {self.max_retries} retries: {e}"
             ) from e
 
-@celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
-def process_pdf_task_05112025(self, files, metadata=None):
-    """
-    Main Celery task to:
-        1) upload PDFs to S3, 
-        2) save to Supabase, 
-        3) and trigger vector embedding tasks.
-    Typically used to upload documents for creation of a new "RAG project"
+# @celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
+# def process_pdf_task_05112025(self, files, metadata=None):
+#     """
+#     Main Celery task to:
+#         1) upload PDFs to S3, 
+#         2) save to Supabase, 
+#         3) and trigger vector embedding tasks.
+#     Typically used to upload documents for creation of a new "RAG project"
 
-    Args:
-        files (List): Containing file CDN urls (created by WeWeb's document upload element)
-        metadata (json): {
-            'user_id': UUID,
-            'project_id': UUID,
-            'model_name': 'gpt-4o', 'llama3.1'...,
-            'note_type': 'case_summary'
-        }
+#     Args:
+#         files (List): Containing file CDN urls (created by WeWeb's document upload element)
+#         metadata (json): {
+#             'user_id': UUID,
+#             'project_id': UUID,
+#             'model_name': 'gpt-4o', 'llama3.1'...,
+#             'note_type': 'case_summary'
+#         }
 
-    Returns: 
-        None: This task now launches a chord and doesn't wait for its completion.
-        The final success is logged by the chord's callback task.
-    """
-    try:
-        # === RENDER RESOURCE LOGGING (MB) === #
-        process = psutil.Process(os.getpid())
-        mem_before = process.memory_info().rss
-        logger.info(f"Starting {self.name} with files: {files} and metadata: {metadata}")
-        logger.info(f"Memory usage before task: {mem_before / (1024 * 1024)} MB")
+#     Returns: 
+#         None: This task now launches a chord and doesn't wait for its completion.
+#         The final success is logged by the chord's callback task.
+#     """
+#     try:
+#         # === RENDER RESOURCE LOGGING (MB) === #
+#         process = psutil.Process(os.getpid())
+#         mem_before = process.memory_info().rss
+#         logger.info(f"Starting {self.name} with files: {files} and metadata: {metadata}")
+#         logger.info(f"Memory usage before task: {mem_before / (1024 * 1024)} MB")
 
-        if not files:
-            logger.warning("No files provided for processing.")
-            self.update_state(
-                state='FAILURE', 
-                meta={
-                    'exc_type':     type(e).__name__,
-                    'exc_module':   e.__class__.__module__,
-                    'exc_message':  str(e),
-                    'error': "No files provided"
-                }
-            )
-            return {"error": "Please upload at least one PDF file before processing."}
+#         if not files:
+#             logger.warning("No files provided for processing.")
+#             self.update_state(
+#                 state='FAILURE', 
+#                 meta={
+#                     'exc_type':     type(e).__name__,
+#                     'exc_module':   e.__class__.__module__,
+#                     'exc_message':  str(e),
+#                     'error': "No files provided"
+#                 }
+#             )
+#             return {"error": "Please upload at least one PDF file before processing."}
         
-        rows_to_insert = []
-        temp_paths = []  # keep track of temps for cleanup
+#         rows_to_insert = []
+#         temp_paths = []  # keep track of temps for cleanup
 
-        # === 1) Download & upload each file ===
-        for file in files:
-            try:
-                # download or read locally
-                if file.lower().startswith(("http://", "https://")):
-                    resp = requests.get(file)
-                    resp.raise_for_status()
-                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-                    tmp.write(resp.content)
-                    tmp.close()
-                    file_path = tmp.name
-                else:
-                    file_path = file
+#         # === 1) Download & upload each file ===
+#         for file in files:
+#             try:
+#                 # download or read locally
+#                 if file.lower().startswith(("http://", "https://")):
+#                     resp = requests.get(file)
+#                     resp.raise_for_status()
+#                     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+#                     tmp.write(resp.content)
+#                     tmp.close()
+#                     file_path = tmp.name
+#                 else:
+#                     file_path = file
 
-                # upload to S3
-                ext = os.path.splitext(file_path)[1]
-                key = f"{uuid.uuid4()}{ext}"
-                upload_to_s3(s3_client, file_path, key)
+#                 # upload to S3
+#                 ext = os.path.splitext(file_path)[1]
+#                 key = f"{uuid.uuid4()}{ext}"
+#                 upload_to_s3(s3_client, file_path, key)
 
-                # get CloudFront URL
-                url = get_cloudfront_url(key)
+#                 # get CloudFront URL
+#                 url = get_cloudfront_url(key)
 
-                rows_to_insert.append({
-                    "cdn_url": url,
-                    "project_id": str(metadata["project_id"]),          # Enforce type check
-                    "content_tags": ["Fitness", "Health", "Wearables"],
-                    "uploaded_by": str(metadata["user_id"]),            # Enforce type check
-                    "vector_embed_status": "UPLOADING" # Set initial status
-                })
-                temp_paths.append(file_path)
+#                 rows_to_insert.append({
+#                     "cdn_url": url,
+#                     "project_id": str(metadata["project_id"]),          # Enforce type check
+#                     "content_tags": ["Fitness", "Health", "Wearables"],
+#                     "uploaded_by": str(metadata["user_id"]),            # Enforce type check
+#                     "vector_embed_status": "UPLOADING" # Set initial status
+#                 })
+#                 temp_paths.append(file_path)
 
-                logger.info(f"Prepared upload row for {file_path} → {url}")
+#                 logger.info(f"Prepared upload row for {file_path} → {url}")
 
-            except Exception as e:
-                logger.error(f"[file loop] Failed processing '{file}': {e}", exc_info=True)
-                # skip this file and continue
-                continue
+#             except Exception as e:
+#                 logger.error(f"[file loop] Failed processing '{file}': {e}", exc_info=True)
+#                 # skip this file and continue
+#                 continue
 
-        if not rows_to_insert:
-            logger.error("No successful uploads; aborting task.")
-            self.update_state(
-                state='FAILURE', 
-                meta={
-                    'exc_type':     type(e).__name__,
-                    'exc_module':   e.__class__.__module__,
-                    'exc_message':  str(e),
-                    'error': "All initial file processing/uploads failed."
-                }
-            )
-            raise RuntimeError("All file uploads failed.")
+#         if not rows_to_insert:
+#             logger.error("No successful uploads; aborting task.")
+#             self.update_state(
+#                 state='FAILURE', 
+#                 meta={
+#                     'exc_type':     type(e).__name__,
+#                     'exc_module':   e.__class__.__module__,
+#                     'exc_message':  str(e),
+#                     'error': "All initial file processing/uploads failed."
+#                 }
+#             )
+#             raise RuntimeError("All file uploads failed.")
 
-        # === 2) Bulk insert into Supabase ===
-        source_ids = [] # Initialize source_ids list
-        try:
-            response = supabase_client.table("document_sources") \
-                                .insert(rows_to_insert) \
-                                .execute()
+#         # === 2) Bulk insert into Supabase ===
+#         source_ids = [] # Initialize source_ids list
+#         try:
+#             response = supabase_client.table("document_sources") \
+#                                 .insert(rows_to_insert) \
+#                                 .execute()
             
-            # If we reach here, the insert was successful. Extract source_ids
-            source_ids = [r["id"] for r in response.data]
+#             # If we reach here, the insert was successful. Extract source_ids
+#             source_ids = [r["id"] for r in response.data]
 
-            # Update status in Supabase to PENDING for embedding after successful initial insert (for each file in the batch)
-            update_payload = [{"id": sid, "vector_embed_status": "PENDING"} for sid in source_ids]
-            update_resp = supabase_client.table("document_sources") \
-                                .upsert(update_payload) \
-                                .execute()
+#             # Update status in Supabase to PENDING for embedding after successful initial insert (for each file in the batch)
+#             update_payload = [{"id": sid, "vector_embed_status": "PENDING"} for sid in source_ids]
+#             update_resp = supabase_client.table("document_sources") \
+#                                 .upsert(update_payload) \
+#                                 .execute()
 
-        except Exception as e:
-            logger.error(f"[Supabase] Bulk insert failed: {e}", exc_info=True)
-            # Cleanup temp files before re-raising the exception for Celery retry
-            for p in temp_paths:
-                try: 
-                    os.unlink(p)
-                    logger.debug(f"Deleted temp file {p} after Supabase insert failure.")
-                except: 
-                    logger.warning(f"[CELERY] Could not delete temp file {p} during Supabase failure cleanup.", exc_info=True)
-            # Update task state
-            self.update_state(
-                state='FAILURE', 
-                meta={
-                    'exc_type':     type(e).__name__,
-                    'exc_module':   e.__class__.__module__,
-                    'exc_message':  str(e),
-                    'error': f"Initial DB insert failed: {e}"
-                }
-            )
-            raise
+#         except Exception as e:
+#             logger.error(f"[Supabase] Bulk insert failed: {e}", exc_info=True)
+#             # Cleanup temp files before re-raising the exception for Celery retry
+#             for p in temp_paths:
+#                 try: 
+#                     os.unlink(p)
+#                     logger.debug(f"Deleted temp file {p} after Supabase insert failure.")
+#                 except: 
+#                     logger.warning(f"[CELERY] Could not delete temp file {p} during Supabase failure cleanup.", exc_info=True)
+#             # Update task state
+#             self.update_state(
+#                 state='FAILURE', 
+#                 meta={
+#                     'exc_type':     type(e).__name__,
+#                     'exc_module':   e.__class__.__module__,
+#                     'exc_message':  str(e),
+#                     'error': f"Initial DB insert failed: {e}"
+#                 }
+#             )
+#             raise
 
-        # === 3) Cleanup temp files ===
-        for path in temp_paths:
-            try:
-                os.unlink(path)
-                logger.debug(f"Deleted temp file {path}")
-            except Exception:
-                logger.warning(f"[CELERY] Could not delete temp file {path}", exc_info=True)
+#         # === 3) Cleanup temp files ===
+#         for path in temp_paths:
+#             try:
+#                 os.unlink(path)
+#                 logger.debug(f"Deleted temp file {path}")
+#             except Exception:
+#                 logger.warning(f"[CELERY] Could not delete temp file {path}", exc_info=True)
 
-        # === 4) Kick off the Chord (Embedding Tasks + Final Callback) ===
-        # Create a list of task signatures for the chord header
-        embedding_tasks = [
-            chunk_and_embed_task.s(
-                row["cdn_url"],                 # Pass the CDN URL
-                sid,                            # Pass the source_id from the DB insert
-                metadata["project_id"]          # Pass the project_id
-            )
-            for sid, row in zip(source_ids, rows_to_insert)
-        ]
+#         # === 4) Kick off the Chord (Embedding Tasks + Final Callback) ===
+#         # Create a list of task signatures for the chord header
+#         embedding_tasks = [
+#             chunk_and_embed_task.s(
+#                 row["cdn_url"],                 # Pass the CDN URL
+#                 sid,                            # Pass the source_id from the DB insert
+#                 metadata["project_id"]          # Pass the project_id
+#             )
+#             for sid, row in zip(source_ids, rows_to_insert)
+#         ]
 
-        # Define the chord body (the callback task)
-        callback_task = finalize_document_processing_workflow.s(source_ids)
+#         # Define the chord body (the callback task)
+#         callback_task = finalize_document_processing_workflow.s(source_ids)
 
-        # Create the chord: group of embedding tasks followed by the callback
-        document_processing_chord = chord(embedding_tasks)(callback_task)
+#         # Create the chord: group of embedding tasks followed by the callback
+#         document_processing_chord = chord(embedding_tasks)(callback_task)
 
-        # Launch the chord
-        logger.info(f"Launching chord with {len(embedding_tasks)} embedding tasks and callback.")
-        document_processing_chord.delay()
+#         # Launch the chord
+#         logger.info(f"Launching chord with {len(embedding_tasks)} embedding tasks and callback.")
+#         document_processing_chord.delay()
 
-        # The final success log will be in the finalize_document_processing_workflow task.
-        logger.info(f"{self.name} launched chord for source_ids: {source_ids}. Task is now complete.")
+#         # The final success log will be in the finalize_document_processing_workflow task.
+#         logger.info(f"{self.name} launched chord for source_ids: {source_ids}. Task is now complete.")
 
-        return source_ids     # Return source_ids to check on the pipeline via database col query public.document_sources.vector_embed_status
+#         return source_ids     # Return source_ids to check on the pipeline via database col query public.document_sources.vector_embed_status
     
-    except Exception as e:
-        # this catches anything that bubbled out of your inner logic
-        logger.error(f"Overall process_pdf_task failed: {e}", exc_info=True)
+#     except Exception as e:
+#         # this catches anything that bubbled out of your inner logic
+#         logger.error(f"Overall process_pdf_task failed: {e}", exc_info=True)
 
-        try:
-            # schedule a retry if we haven’t hit max_retries yet
-            raise self.retry(exc=e)
-        except MaxRetriesExceededError:
-            # once retries are exhausted, raise a clear runtime error
-            logger.critical(
-                f"[CELERY] process_pdf_task failed permanently after {self.max_retries} retries: {e}"
-            )
-            raise RuntimeError(
-                f"[CELERY] process_pdf_task failed permanently after {self.max_retries} retries: {e}"
-            ) from e
+#         try:
+#             # schedule a retry if we haven’t hit max_retries yet
+#             raise self.retry(exc=e)
+#         except MaxRetriesExceededError:
+#             # once retries are exhausted, raise a clear runtime error
+#             logger.critical(
+#                 f"[CELERY] process_pdf_task failed permanently after {self.max_retries} retries: {e}"
+#             )
+#             raise RuntimeError(
+#                 f"[CELERY] process_pdf_task failed permanently after {self.max_retries} retries: {e}"
+#             ) from e
 
-@celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
-def process_pdf_task_no_chord(self, files, metadata=None):
-    """
-    Main Celery task to:
-        1) upload PDFs to S3, 
-        2) save to Supabase, 
-        3) and trigger vector embedding tasks.
-    Typically used to upload documents for creation of a new "RAG project"
+# @celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
+# def process_pdf_task_no_chord(self, files, metadata=None):
+#     """
+#     Main Celery task to:
+#         1) upload PDFs to S3, 
+#         2) save to Supabase, 
+#         3) and trigger vector embedding tasks.
+#     Typically used to upload documents for creation of a new "RAG project"
 
-    Args:
-        files (List): Containing file CDN urls (created by WeWeb's document upload element)
-        metadata (json): {
-            'user_id': UUID,
-            'project_id': UUID,
-            'model_name': 'gpt-4o', 'llama3.1'...,
-            'note_type': 'case_summary'
-        }
+#     Args:
+#         files (List): Containing file CDN urls (created by WeWeb's document upload element)
+#         metadata (json): {
+#             'user_id': UUID,
+#             'project_id': UUID,
+#             'model_name': 'gpt-4o', 'llama3.1'...,
+#             'note_type': 'case_summary'
+#         }
 
-    Returns: 
-        source_ids (List): list of source ids (for later use in the celery task chord)
-    """
-    try:
-        # === RENDER RESOURCE LOGGING (MB) === #
-        process = psutil.Process(os.getpid())
-        mem_before = process.memory_info().rss
-        logger.info(f"Starting {self.name} with files: {files} and metadata: {metadata}")
-        logger.info(f"Memory usage before task: {mem_before / (1024 * 1024)} MB")
+#     Returns: 
+#         source_ids (List): list of source ids (for later use in the celery task chord)
+#     """
+#     try:
+#         # === RENDER RESOURCE LOGGING (MB) === #
+#         process = psutil.Process(os.getpid())
+#         mem_before = process.memory_info().rss
+#         logger.info(f"Starting {self.name} with files: {files} and metadata: {metadata}")
+#         logger.info(f"Memory usage before task: {mem_before / (1024 * 1024)} MB")
 
-        if not files:
-            logger.warning("No files provided for processing.")
-            return {"error": "Please upload at least one PDF file before processing."}
+#         if not files:
+#             logger.warning("No files provided for processing.")
+#             return {"error": "Please upload at least one PDF file before processing."}
         
-        rows_to_insert = []
-        temp_paths = []  # keep track of temps for cleanup
+#         rows_to_insert = []
+#         temp_paths = []  # keep track of temps for cleanup
 
-        # === 1) Download & upload each file ===
-        for file in files:
-            try:
-                # download or read locally
-                if file.lower().startswith(("http://", "https://")):
-                    resp = requests.get(file)
-                    resp.raise_for_status()
-                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-                    tmp.write(resp.content)
-                    tmp.close()
-                    file_path = tmp.name
-                else:
-                    file_path = file
+#         # === 1) Download & upload each file ===
+#         for file in files:
+#             try:
+#                 # download or read locally
+#                 if file.lower().startswith(("http://", "https://")):
+#                     resp = requests.get(file)
+#                     resp.raise_for_status()
+#                     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+#                     tmp.write(resp.content)
+#                     tmp.close()
+#                     file_path = tmp.name
+#                 else:
+#                     file_path = file
 
-                # upload to S3
-                ext = os.path.splitext(file_path)[1]
-                key = f"{uuid.uuid4()}{ext}"
-                upload_to_s3(s3_client, file_path, key)
+#                 # upload to S3
+#                 ext = os.path.splitext(file_path)[1]
+#                 key = f"{uuid.uuid4()}{ext}"
+#                 upload_to_s3(s3_client, file_path, key)
 
-                # get CloudFront URL
-                url = get_cloudfront_url(key)
+#                 # get CloudFront URL
+#                 url = get_cloudfront_url(key)
 
-                rows_to_insert.append({
-                    "cdn_url": url,
-                    "project_id": metadata["project_id"],
-                    "content_tags": ["Fitness", "Health", "Wearables"],
-                    "uploaded_by": metadata["user_id"],
-                })
-                temp_paths.append(file_path)
+#                 rows_to_insert.append({
+#                     "cdn_url": url,
+#                     "project_id": metadata["project_id"],
+#                     "content_tags": ["Fitness", "Health", "Wearables"],
+#                     "uploaded_by": metadata["user_id"],
+#                 })
+#                 temp_paths.append(file_path)
 
-                logger.info(f"Prepared upload row for {file_path} → {url}")
+#                 logger.info(f"Prepared upload row for {file_path} → {url}")
 
-            except Exception as e:
-                logger.error(f"[file loop] Failed processing '{file}': {e}", exc_info=True)
-                # skip this file and continue
-                continue
+#             except Exception as e:
+#                 logger.error(f"[file loop] Failed processing '{file}': {e}", exc_info=True)
+#                 # skip this file and continue
+#                 continue
 
-        if not rows_to_insert:
-            logger.error("No successful uploads; aborting task.")
-            raise RuntimeError("All file uploads failed.")
+#         if not rows_to_insert:
+#             logger.error("No successful uploads; aborting task.")
+#             raise RuntimeError("All file uploads failed.")
 
-        # === 2) Bulk insert into Supabase ===
-        try:
-            response = supabase_client.table("document_sources") \
-                                .insert(rows_to_insert) \
-                                .execute()
-            source_ids = [r["id"] for r in response.data]
+#         # === 2) Bulk insert into Supabase ===
+#         try:
+#             response = supabase_client.table("document_sources") \
+#                                 .insert(rows_to_insert) \
+#                                 .execute()
+#             source_ids = [r["id"] for r in response.data]
 
-            # Loop thorugh reoponse to get, source_id list for the chaining/vector_embed tasks
-            source_ids = [r["id"] for r in response.data]
-            logger.info(f"Bulk insert succeeded into public.document_sources, got source_ids={source_ids}")
+#             # Loop thorugh reoponse to get, source_id list for the chaining/vector_embed tasks
+#             source_ids = [r["id"] for r in response.data]
+#             logger.info(f"Bulk insert succeeded into public.document_sources, got source_ids={source_ids}")
 
-        except Exception as e:
-            logger.error(f"[Supabase] Bulk insert failed: {e}", exc_info=True)
-            # cleanup temp files before re-raising
-            for p in temp_paths:
-                try: 
-                    os.unlink(p)
-                    logger.debug(f"Deleted temp file {p} after Supabase insert failure.")
-                except: 
-                    logger.warning(f"[CELERY] Could not delete temp file {p} during Supabase failure cleanup.", exc_info=True)
-            raise
+#         except Exception as e:
+#             logger.error(f"[Supabase] Bulk insert failed: {e}", exc_info=True)
+#             # cleanup temp files before re-raising
+#             for p in temp_paths:
+#                 try: 
+#                     os.unlink(p)
+#                     logger.debug(f"Deleted temp file {p} after Supabase insert failure.")
+#                 except: 
+#                     logger.warning(f"[CELERY] Could not delete temp file {p} during Supabase failure cleanup.", exc_info=True)
+#             raise
 
-        # === 3) Cleanup temp files ===
-        for path in temp_paths:
-            try:
-                os.unlink(path)
-                logger.debug(f"Deleted temp file {path}")
-            except Exception:
-                logger.warning(f"[CELERY] Could not delete temp file {path}", exc_info=True)
+#         # === 3) Cleanup temp files ===
+#         for path in temp_paths:
+#             try:
+#                 os.unlink(path)
+#                 logger.debug(f"Deleted temp file {path}")
+#             except Exception:
+#                 logger.warning(f"[CELERY] Could not delete temp file {path}", exc_info=True)
 
-        # === 4) Kick off embedding tasks ===
-        for sid, row in zip(source_ids, rows_to_insert):
-            try:
-                chunk_and_embed_task.delay(row["cdn_url"], sid, metadata["project_id"])
-                logger.info(f"Enqueued embed task for source_id={sid}")
-            except Exception as e:
-                logger.error(f"[CELERY] Failed to enqueue embed for {sid}: {e}", exc_info=True)
+#         # === 4) Kick off embedding tasks ===
+#         for sid, row in zip(source_ids, rows_to_insert):
+#             try:
+#                 chunk_and_embed_task.delay(row["cdn_url"], sid, metadata["project_id"])
+#                 logger.info(f"Enqueued embed task for source_id={sid}")
+#             except Exception as e:
+#                 logger.error(f"[CELERY] Failed to enqueue embed for {sid}: {e}", exc_info=True)
 
-        logger.info(f"{self.name} completed successfully.")
-        return source_ids
-    except Exception as e:
-        # this catches anything that bubbled out of your inner logic
-        logger.error(f"Step 1 (upload+embed) failed: {e}", exc_info=True)
-        try:
-            # schedule a retry if we haven’t hit max_retries yet
-            raise self.retry(exc=e)
-        except MaxRetriesExceededError:
-            # once retries are exhausted, raise a clear runtime error
-            raise RuntimeError(
-                f"[CELERY] Step 1) (Upload+embed) failed permanently after {self.max_retries} retries: {e}"
-            ) from e
+#         logger.info(f"{self.name} completed successfully.")
+#         return source_ids
+#     except Exception as e:
+#         # this catches anything that bubbled out of your inner logic
+#         logger.error(f"Step 1 (upload+embed) failed: {e}", exc_info=True)
+#         try:
+#             # schedule a retry if we haven’t hit max_retries yet
+#             raise self.retry(exc=e)
+#         except MaxRetriesExceededError:
+#             # once retries are exhausted, raise a clear runtime error
+#             raise RuntimeError(
+#                 f"[CELERY] Step 1) (Upload+embed) failed permanently after {self.max_retries} retries: {e}"
+#             ) from e
 
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
 def chunk_and_embed_task(self, pdf_url, source_id, project_id, chunk_size=1000, chunk_overlap=100):
@@ -749,7 +749,8 @@ def chunk_and_embed_task(self, pdf_url, source_id, project_id, chunk_size=1000, 
             # remove literal NULLs and other problematic control characters if needed
             # For this specific error, '\x00' is the key.
             return s.replace('\x00', '')
-
+        
+        # 5.1) Build rows for bulk insert
         vector_rows = []
         for text, meta, vector in zip(texts, metadatas, embeddings):
             clean_text = _clean(text)

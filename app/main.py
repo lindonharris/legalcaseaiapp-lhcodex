@@ -399,7 +399,6 @@ async def generate_ai_note(
             returns: None
         
     Request contains:
-        request.files (List): list of pdf file links
         request.metadata (json): {
             project_id:,
             chat_session_id:,
@@ -756,32 +755,32 @@ async def get_rag_chat_status(task_id: str):
 #          RAG GENERATIVE NOTES ENDPOINTS
 # ================================================ #
 
-@app.post("/generate-rag-note/")
-async def generate_rag_note(request: RagQueryRequest):
-    """
-    postman raw json body:
-    {
-        "user_id": "",
-        "chat_session_id": "",
-        "query": "",
-        "project_id": "",
-        "model_name": "" 
-    }
-    """
-    try:
-        # Trigger the RAG task asynchronously and add it to the queue
-        task = rag_chat_task.apply_async(args=[
-            request.user_id,
-            request.chat_session_id,
-            request.query,
-            request.project_id,
-            request.model_name
-        ])
+# @app.post("/generate-rag-note/")
+# async def generate_rag_note(request: RagQueryRequest):
+#     """
+#     postman raw json body:
+#     {
+#         "user_id": "",
+#         "chat_session_id": "",
+#         "query": "",
+#         "project_id": "",
+#         "model_name": "" 
+#     }
+#     """
+#     try:
+#         # Trigger the RAG task asynchronously and add it to the queue
+#         task = rag_chat_task.apply_async(args=[
+#             request.user_id,
+#             request.chat_session_id,
+#             request.query,
+#             request.project_id,
+#             request.model_name
+#         ])
         
-        # Return the task ID to the client
-        return {"task_id": task.id}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+#         # Return the task ID to the client
+#         return {"task_id": task.id}
+#     except Exception as e:
+#         raise HTTPException(status_code=400, detail=str(e))
 
 
 # ================================================ #

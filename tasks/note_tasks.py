@@ -215,6 +215,12 @@ def rag_note_task(
         if note_type == "exam-questions":
             query = "Based on the documents (appended as rag context) create an list of 15 exam questions"
 
+        if note_type == "case_brief":
+            query = "Based on the documents create a comprehensive case brief"
+
+        if note_type == "compare_contrast":
+            query = "Based on the documents create a compare and contrast of the cases"
+
         # Step 1) Embed the query using OpenAI Ada embeddings (1536 dims)
         embedding_model = OpenAIEmbeddings(
             model="text-embedding-ada-002",
