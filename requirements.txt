@@ -12,6 +12,9 @@ psutil
 # AI dependencies
 openai
 tiktoken
+anthropic
+google-cloud-aiplatform
+google-auth
 
 # RENDER.io dependencies
 fastapi

@@ -52,8 +52,6 @@ origins = [
 
 # Using a regex to allow any subdomain of weweb-preview.io
 # The .* matches any characters (the subdomain)
-# The \. escapes the dot
-# The $ asserts the end of the string
 origins_regex = r"https://.*\.weweb-preview\.io$"
 
 app.add_middleware(
@@ -410,6 +408,7 @@ async def generate_ai_note(
         request.metadata (json): {
             project_id:,
             chat_session_id:,
+            note_type:,
             ...
             model_name
         }
