@@ -26,7 +26,7 @@ from langchain.callbacks.base import BaseCallbackHandler
 #### GLOBAL ####
 # API Keys
 load_dotenv()
-OPENAI_API_KEY = os.environ.get("OPENAI_API_PROD_KEY")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_PROD_KEY")  # ← only for embeddings
 
 # Define which models support temp (and their allowed ranges, if you like)
 _MODEL_TEMPERATURE_CONFIG = {
@@ -78,12 +78,14 @@ def get_chat_llm(
     callback_manager: any = None,
 ) -> "ChatOpenAI":
     """
+    DEPRECATED!!!!
     Factory to create a ChatOpenAI instance.
     If callback_manager is provided, enable streaming and attach handlers.
 
     (default) OpenAI o4-mini model
     """
     from langchain_openai import ChatOpenAI     # Lazy-import to reduce startup footprint
+
 
     cfg = _MODEL_TEMPERATURE_CONFIG.get(model_name, {"supports_temperature": True})
     llm_kwargs = {
@@ -180,7 +182,9 @@ def rag_chat_task(
     chat_session_id, 
     query, 
     project_id, 
-    model_name,
+    provider: str,  # ← “openai”, “anthropic”, etc.
+    model_name: str,
+    temperature: float = 0.7,
 ):
     """
     Main RAG workflow, implementing the standard “optimistic UI” pattern
@@ -200,7 +204,8 @@ def rag_chat_task(
             model_name = "o4-mini"
 
         # Step 1) Embed the query
-        from langchain_openai import OpenAIEmbeddings       # Lazy-import heavy modules
+        # from langchain_openai import OpenAIEmbeddings       # Lazy-import heavy modules
+        from langchain.embeddings.openai import OpenAIEmbeddings    # Lazy-import heavy modules
         embedding_model = OpenAIEmbeddings(
             model="text-embedding-ada-002",
             api_key=OPENAI_API_KEY,
@@ -210,12 +215,20 @@ def rag_chat_task(
         # Step 2) Fetch top-K relevant chunks via Supabase RPC
         relevant_chunks = fetch_relevant_chunks(query_embedding, project_id)
 
-        # Step 3) Generate answer for client
+        # Step 3) Generate llm client from factory
+        from utils.llm_factory import LLMFactory       # Lazy-import heavy modules
+        llm_client = LLMFactory.get_client(
+            provider=provider,
+            model_name=model_name,
+            temperature=temperature
+        )
+
+        # Step 3.1) Generate answer for client
         assistant_response = generate_rag_answer(
-            query,
-            chat_session_id,
-            relevant_chunks,
-            model_name=model_name
+            llm_client=llm_client,
+            query=query,
+            chat_session_id=chat_session_id,
+            relevant_chunks=relevant_chunks
         )
 
         # Step 4) Insert assistant response
@@ -269,29 +282,44 @@ def fetch_relevant_chunks(query_embedding, project_id, match_count=10):
         raise
 
 
-def generate_rag_answer(query, chat_session_id, relevant_chunks, model_name, max_chat_history=10):
+def generate_rag_answer(
+    llm_client,
+    query: str,
+    chat_session_id: str,
+    relevant_chunks: list,
+    max_chat_history: int = 10,
+) -> str:
     """
     Build prompt, invoke LLM, return the full generated answer at completion.
     """
-    from langchain_openai import ChatOpenAI     # Lazy-import heavy modules
     
     # Build conversational context
     chat_history = fetch_chat_history(chat_session_id)[-max_chat_history:]
     formatted_history = format_chat_history(chat_history) if chat_history else ""
     chunk_context = "\n\n".join(c["content"] for c in relevant_chunks)
+
     full_context = (
         f"{formatted_history}\n\nRelevant Context:\n{chunk_context}\n\n"
         f"User Query: {query}\nAssistant:"
     )
+
     trimmed_context = trim_context_length(
-        full_context, query, relevant_chunks, model_name, max_tokens=127999
+        full_context=full_context,
+        query=query,
+        relevant_chunks=relevant_chunks,
+        model_name=llm_client.model_name,
+        max_tokens=127999
     )
 
-    llm = get_chat_llm(model_name)
-    answer = llm.predict(trimmed_context)
-    return answer
-
-# Other helper functions unchanged
+    # 5) Finally, call the LLM client once
+    try:
+        # All of your LLMClient implementations expose `.chat(prompt: str) -> str`
+        answer = llm_client.chat(trimmed_context)
+        # llm_client = get_chat_llm(model_name) # being SUNSET !!! 
+        return answer
+    except Exception as e:
+        logger.error(f"Error in LLM call (model={llm_client.model_name}): {e}", exc_info=True)
+        raise
 
 def fetch_chat_history(chat_session_id):
     response = supabase_client.table("messages") \

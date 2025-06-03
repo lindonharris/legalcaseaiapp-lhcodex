@@ -171,7 +171,9 @@ class RagQueryRequest(BaseModel):
     chat_session_id: str
     query: str
     project_id: str
+    provider: str
     model_name: str
+    temperature: float
 
 class RagQueryResponse(BaseModel):  
     '''
@@ -303,7 +305,7 @@ async def create_new_rag_project(
     request: NewRagPipelineRequest, 
     background_tasks: BackgroundTasks
 ):
-    '''
+    '''LIVE (06-03-2025)
     Endpoint to create a RAG pipeline for user project:
         - Uploads PDFs to AWS S3 and Supabase
         - Initiates chunking and embedding tasks
@@ -359,7 +361,7 @@ async def create_new_rag_project_and_gen_notes(
     request: NewRagPipelineRequest, 
     background_tasks: BackgroundTasks
 ):
-    '''
+    '''UNUSED...
     Endpoint to create BOTH a RAG pipeline and a "quick action" AI note, chaining 2 celery notes together
         - process_pdf_task():
             input: request.files, request.metadata
@@ -373,6 +375,9 @@ async def create_new_rag_project_and_gen_notes(
         request.files (List): list of pdf file links
         request.metadata (json): {
             project_id:
+            provider:
+            model_name:
+            temperature:
         }
     '''
     try:
@@ -398,7 +403,7 @@ async def generate_ai_note(
     request: NewGeneratedNoteRequest, 
     background_tasks: BackgroundTasks
 ):
-    '''
+    '''LIVE (06-03-2025)
     Endpoint to generate note for an EXISTING project
         - rag_note_task():
             input: request.metadata
@@ -477,7 +482,7 @@ async def append_sources_to_project(request: NewRagPipelineRequest, background_t
 
 @app.post("/rag-chat/original")
 async def rag_chat_original(request: RagQueryRequest):
-    """Endpoint for the rag query responses (token streaming not enabled)"""
+    """DEPRECATED... Endpoint for the rag query responses (token streaming not enabled)"""
     try:
         # Trigger the RAG task asynchronously and add it to the queue
         task = rag_chat_task.apply_async(args=[
@@ -485,7 +490,9 @@ async def rag_chat_original(request: RagQueryRequest):
             request.chat_session_id,
             request.query,
             request.project_id,
-            request.model_name
+            request.provider,
+            request.model_name,
+            request.temperature,
         ])
         
         # Return the task ID to the client
@@ -508,7 +515,9 @@ async def rag_chat(request: RagQueryRequest):
         "chat_session_id": "...",
         "query": "...",
         "project_id": "...",
+        "provider": "..." 
         "model_name": "..." 
+        "temperature": "..." 
     }
     """
     try:
@@ -519,7 +528,7 @@ async def rag_chat(request: RagQueryRequest):
                 request.chat_session_id,
                 request.query,
                 request.project_id,
-                request.model_name
+                request.model_name,
             ),
             # the return value of persist_user_query (i.e. message_id) ...
             # will be passed as the FIRST arg to rag_chat_task
@@ -528,7 +537,9 @@ async def rag_chat(request: RagQueryRequest):
                 request.chat_session_id,
                 request.query,
                 request.project_id,
-                request.model_name
+                request.provider,
+                request.model_name,
+                request.temperature,
             )
         ).apply_async()
         # Return the task ID to the client

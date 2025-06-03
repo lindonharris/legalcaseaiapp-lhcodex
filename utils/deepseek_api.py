@@ -38,8 +38,8 @@ def generate_flashcards(raw_text: str, model: str = "deepseek-chat") -> list:
     
     Returns:
         list: A list of flashcard dictionaries in the format 
-              [{'Front': 'Key Term', 'Back': 'Definition'}, ...].
-              If the response is empty or cannot be parsed as JSON, returns the raw response content.
+            [{'Front': 'Key Term', 'Back': 'Definition'}, ...].
+            If the response is empty or cannot be parsed as JSON, returns the raw response content.
     """
     messages = [
         {

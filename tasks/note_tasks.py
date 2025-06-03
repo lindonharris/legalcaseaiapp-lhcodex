@@ -190,7 +190,9 @@ def rag_note_task(
     user_id, 
     note_type, 
     project_id, 
-    model_name
+    provider: str,  # ← “openai”, “anthropic”, etc.
+    model_name: str,
+    temperature: float = 0.7,
 ):
     """
     Main RAG workflow:
@@ -233,14 +235,22 @@ def rag_note_task(
         # Step 2) Fetch top-K relevant chunks via Supabase RPC
         relevant_chunks = fetch_relevant_chunks(query_embedding, project_id)
 
-        # Step 3) Generation answer for client (@TODO may be used to token streaming at a later point )
-        full_answer = generate_rag_answer(
-            query,
-            relevant_chunks,
-            model_name=model_name  # supports gpt-4o, gemini-flash, deepseek-v3, etc.
+        # Step 3) Generate llm client from factory
+        from utils.llm_factory import LLMFactory       # Lazy-import heavy modules
+        llm_client = LLMFactory.get_client(
+            provider=provider,
+            model_name=model_name,
+            temperature=temperature
         )
 
-        # Step 5) Save note to the public.notes table in Supabase (realtime Supabase table)
+        # Step 3.1) Generate answer for client
+        full_answer = generate_rag_answer(
+            llm_client=llm_client,
+            query=query,
+            relevant_chunks=relevant_chunks
+        )
+
+        # Step 4) Save note to the public.notes table in Supabase (realtime Supabase table)
         save_note(
             project_id,
             user_id, 
@@ -275,10 +285,19 @@ def fetch_relevant_chunks(query_embedding, project_id, match_count=10):
         logger.error(f"Error fetching relevant chunks: {e}", exc_info=True)
         raise
 
-def generate_rag_answer(query, relevant_chunks, model_name, max_chat_history=10):
+def generate_rag_answer(
+        llm_client,
+        query, 
+        relevant_chunks: list,
+        max_chat_history: int = 10,
+    ):
     """
+    [NOTE_TASK SPECIFIC[]
     Build prompt, invoke streaming LLM, publish tokens in real-time,
     and return the full generated answer at completion.
+
+    Q: **Why no `chat_session_id` ?
+    A: because this is going to a project not a chat histoty
     """
     # Build conversational context
     # chat_history = fetch_chat_history(chat_session_id)[-max_chat_history:]
@@ -288,16 +307,24 @@ def generate_rag_answer(query, relevant_chunks, model_name, max_chat_history=10)
         f"Relevant Context:\n{chunk_context}\n\n"
         f"User Query: {query}\nAssistant:"
     )
-    full_context = trim_context_length(full_context, query, relevant_chunks, model_name, max_tokens=127999)
 
-    # Set up streaming callback for token-level pushes
-    # handler = StreamToClientHandler(chat_session_id)                     # Disabled, no token streaming
-    # cb_manager = CallbackManager([handler])                              # Disabled, no token streaming
-    llm = get_chat_llm(model_name)
+    trimmed_context = trim_context_length(
+        full_context=full_context,
+        query=query,
+        relevant_chunks=relevant_chunks,
+        model_name=llm_client.model_name,
+        max_tokens=127999
+    )
 
-    # Streaming prediction: on_llm_new_token fires for each token
-    answer = llm.predict(full_context)
-    return answer
+    # 5) Finally, call the LLM client once
+    try:
+        # All of your LLMClient implementations expose `.chat(prompt: str) -> str`
+        answer = llm_client.chat(trimmed_context)
+        # llm_client = get_chat_llm(model_name) # being SUNSET !!! 
+        return answer
+    except Exception as e:
+        logger.error(f"Error in LLM call (model={llm_client.model_name}): {e}", exc_info=True)
+        raise
 
 def create_new_conversation(user_id, project_id):
     """

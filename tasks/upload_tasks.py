@@ -77,7 +77,9 @@ def process_pdf_task(self, files, metadata=None):
     metadata (json): {
         'user_id': UUID,
         'project_id': UUID,
+        'provider': 'anthropic...', 'meta'...,
         'model_name': 'gpt-4o-mini', 'llama3.1'...,
+        'temparature': '0.7', ...,
         'note_type': 'case_summary'
 
     """
@@ -318,7 +320,9 @@ def process_pdf_task(self, files, metadata=None):
             source_ids,
             metadata["project_id"],
             metadata.get("note_type", "None"),          # default to "None" if missing
-            metadata.get("model_name", "gpt-4o-mini")   # default to gpt-4o-mini  
+            metadata.get("provider", "openai"),
+            metadata.get("model_name", "gpt-4o-mini"),   # default to gpt-4o-mini  
+            metadata.get("temperature", "0.7"),
         )
         chord_result = chord(embedding_tasks)(callback)
         workflow_id = chord_result.id
@@ -808,7 +812,9 @@ def finalize_document_processing_workflow(
     source_ids: List[str],
     project_id: str,
     note_type: str,
-    model_name: str
+    provider: str,
+    model_name: str,
+    temperature: float,
 ):
     """
     Celery callback after all chunk_and_embed_task tasks in a chord complete.
@@ -874,7 +880,9 @@ def finalize_document_processing_workflow(
                     user_id,
                     note_type,
                     project_id,
-                    model_name
+                    provider,
+                    model_name,
+                    temperature,
                 ])
             
             # Update a workflow status record if needed
