@@ -425,7 +425,10 @@ async def generate_ai_note(
                 "user_id":       request.metadata["user_id"],       # ← maps to your user_id param
                 "note_type":     request.metadata["note_type"],     # ← maps to your note_type param
                 "project_id":    request.metadata["project_id"],    # ← maps to your project_id param  
+                "provider":      request.metadata["provider"],
                 "model_name":    request.metadata["model_name"],    # ← maps to your model_name param
+                "temperature":   request.metadata["temperature"],
+                "metadata":      request.metadata["metadata"]       # ← Dict passed in by weweb/postman 
         }
     )
         return {"task_id": job.id}

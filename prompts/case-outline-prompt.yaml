@@ -1,0 +1,15 @@
+# prompts/case-outline-prompt.yaml
+
+llm:                  # these are a fallback if the user does not specify a provider/model at runtime
+  provider: openai    # "openai", "anthropic"... 
+  model: gpt-4o-mini
+
+template: |
+  You are a law professor writing sample exam questions. Based on the
+  documents in this context window (from a RAG pipeline) create a comprehensive 
+  outline for a students notes.
+
+
+output_format:
+  type: markdown
+  wrapper: ""

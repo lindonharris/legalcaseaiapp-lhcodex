@@ -12,6 +12,7 @@ import os
 import redis
 from supabase import create_client, Client
 from utils.supabase_utils import insert_note_supabase_record, supabase_client
+from utils.prompt_utils import load_yaml_prompt, build_prompt_template_from_yaml
 from datetime import datetime, timezone
 import tiktoken
 import requests
@@ -35,15 +36,6 @@ from langchain.text_splitter import CharacterTextSplitter
 # API Keys
 load_dotenv()
 OPENAI_API_KEY = os.environ.get("OPENAI_API_PROD_KEY")
-
-# Define which models support temp (and their allowed ranges, if you like)
-_MODEL_TEMPERATURE_CONFIG = {
-    # no-temperature models
-    "o4-mini":      {"supports_temperature": False},
-    "gpt-4o-mini":  {"supports_temperature": False},
-    # temperature-capable models
-    "gpt-4.1-nano": {"supports_temperature": True, "min": 0.0, "max": 2.0},
-}
 
 # Logging
 logger = logging.getLogger(__name__)
@@ -80,110 +72,7 @@ class StreamToClientHandler(BaseCallbackHandler):
         # Called by LangChain for every new token in streaming mode
         publish_token(self.session_id, token)
 
-def get_chat_llm(
-    model_name: str = "gpt-4o-mini",
-    temperature: float = 0.7,
-    callback_manager: any = None,
-) -> "ChatOpenAI":
-    """
-    Factory to create a ChatOpenAI instance.
-    If callback_manager is provided, enable streaming and attach handlers.
 
-    (default) OpenAI o4-mini model
-    """
-    from langchain_openai import ChatOpenAI     # Lazy-import to reduce startup footprint
-
-    cfg = _MODEL_TEMPERATURE_CONFIG.get(model_name, {"supports_temperature": True})
-    llm_kwargs = {
-        "api_key": OPENAI_API_KEY,
-        "model": model_name,
-        "streaming": False,     # Disable streaming by default
-    }
-    # Only include temperature if this model supports it
-    if cfg.get("supports_temperature", False):
-        lo, hi = cfg.get("min", 0.0), cfg.get("max", 2.0)
-        safe_temp = max(lo, min(temperature, hi))
-        llm_kwargs["temperature"] = safe_temp
-
-    # Attach streaming callback if provided
-    if callback_manager:
-        llm_kwargs["streaming"] = True
-        llm_kwargs["callback_manager"] = callback_manager
-
-    return ChatOpenAI(**llm_kwargs)
-
-# @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
-# def llm_prediction_task(self, context, model_name):
-#     """
-#     FROM GEMINI-Flash for SIGKILL-9 errors
-#     Celery task to perform the LLM prediction.
-#     Runs in its own process, isolated from the calling task.
-#     """
-#     print(f"llm_prediction_task started for model: {model_name}")
-#     try:
-#         # Set up streaming callback for token-level pushes (if needed)
-#         # handler = StreamToClientHandler(chat_session_id) # Disabled, no token streaming
-#         # cb_manager = CallbackManager([handler])          # Disabled, no token streaming
-
-#         llm = get_chat_llm(model_name)
-#         answer = llm.predict(context)
-
-#         print("llm_prediction_task finished successfully.")
-#         return answer # Celery task returns the result
-#     except Exception as e:
-#         print(f"llm_prediction_task encountered an error: {e}")
-#         # Log the exception and potentially retry the task
-#         # traceback.print_exc() # Uncomment for detailed logging
-#         raise self.retry(exc=e) # Use Celery's retry mechanism
-    
-# def generate_rag_answer(query, relevant_chunks, model_name, max_chat_history=10):
-#     """
-#     FROM GEMINI-Flash for SIGKILL-9 errors
-#     Generates a RAG answer by dispatching the LLM call to a Celery task.
-#     Waits for the result of the LLM task.
-#     """
-#     # Build conversational context as before
-#     chunk_context = "\n\n".join(c["content"] for c in relevant_chunks)
-#     full_context = (
-#         f"Relevant Context:\n{chunk_context}\n\n"
-#         f"User Query: {query}\nAssistant:"
-#     )
-#     # Ensure context is trimmed before sending to the LLM task
-#     full_context = trim_context_length(full_context, query, relevant_chunks, model_name, max_tokens=127999)
-
-#     print("Dispatching llm_prediction_task...")
-#     # Dispatch the LLM call to the separate Celery task
-#     # .delay() is a shortcut for .apply_async()
-#     llm_result_async = llm_prediction_task.delay(full_context, model_name)
-
-#     print(f"Waiting for llm_prediction_task result (Task ID: {llm_result_async.id})...")
-#     try:
-#         # Wait for the result of the LLM task.
-#         # This call will block the current worker process until the LLM task completes,
-#         # times out, or fails.
-#         # You should add a reasonable timeout.
-#         full_answer = llm_result_async.get(timeout=300) # Wait up to 300 seconds
-
-#         print("Received result from llm_prediction_task.")
-#         return full_answer
-
-#     except TimeoutError:
-#         # This exception is raised if the .get() call times out.
-#         # This could indicate the LLM task is stuck or potentially OOM-killed
-#         # before it could return a result within the timeout.
-#         print(f"Timeout waiting for LLM task {llm_result_async.id}. Possible OOM-kill or hang.")
-#         # You might want to inspect the task state here if your backend supports it
-#         # state = llm_result_async.state
-#         # info = llm_result_async.info
-#         raise RuntimeError(f"LLM prediction task timed out (Task ID: {llm_result_async.id}).")
-
-#     except Exception as e:
-#         # Catch other exceptions that might occur while getting the result,
-#         # including exceptions propagated from the llm_prediction_task itself.
-#         print(f"Error retrieving result from LLM task {llm_result_async.id}: {e}")
-#         # traceback.print_exc() # Uncomment for detailed logging
-#         raise RuntimeError(f"LLM subprocess failed (Task ID: {llm_result_async.id}): {e}")
-    
 @celery_app.task(bind=True, base=BaseTaskWithRetry)
 def rag_note_task(
     self, 
@@ -193,16 +82,25 @@ def rag_note_task(
     provider: str,  # ← “openai”, “anthropic”, etc.
     model_name: str,
     temperature: float = 0.7,
+    metadata: dict = None,      # <-- a dict containing optional overrides, like {"num_questions": 10}
 ):
     """
-    Main RAG workflow:
-    1. Embed the generate note query as dim-1536
-    2. Retrieve relevant document chunks
-    3. Stream LLM response tokens to client and collect full answer
-    4. Persist query and answer in Supabase
+    RAG workflow for various note types (exam questions, case briefs, outlines, etc.).
+
+    Steps:
+    1) Embed a short “retrieval” query (as dim-1536 embedding)
+    2) Fetch top-K relevant chunks via Supabase RPC
+    3) Load the appropriate YAML prompt based on note_type
+    4) Format that YAML template with {context} + any override from meta (e.g. num_questions)
+    5) Call the LLM once with the fully formed prompt (Stream LLM response tokens or return all at once)
+    6) Persist note output to public.notes
     """
+    
+    if metadata is None:
+        metadata = {}
+    
     try:
-        # Set explicit start time in self.metadata
+        # Step 0) Mark explicit start time in self.metadata
         # This manually sets result = AsyncResult(task_id) when checking on this celery task via job.id
         # result.state → "PENDING"
         # result.info → {"start_time": "..."}
@@ -211,31 +109,57 @@ def rag_note_task(
             meta={"start_time": datetime.now(timezone.utc).isoformat()}
         )
 
+        # Step 1) Choose the prompt based on user selection of "note_type"
         if note_type == "outline":
             query = "Create a comprehensive outline of the following documents"
-
-        if note_type == "exam-questions":
-            query = "Based on the document(s) (appended as rag context) create an list of 15 exam questions"
-
-        if note_type == "exam_questions":
+            yaml_file = "case-outline-prompt.yaml"
+        elif note_type == "exam_questions":
             query = "Based on the documents (appended as rag context) create an list of 15 exam questions"
-
-        if note_type == "case_brief":
+            yaml_file = "exam-questions-prompt.yaml"
+        elif note_type == "case_brief":
             query = "Based on the documents create a comprehensive case brief"
-
-        if note_type == "compare_contrast":
+        elif note_type == "compare_contrast":
             query = "Based on the documents create a compare and contrast of the cases"
+        else:
+            raise ValueError(f"Unknown note_type: {note_type}")
+        
+        # Load that YAML
+        yaml_dict = load_yaml_prompt(yaml_file)
+        prompt_template = build_prompt_template_from_yaml(yaml_dict)
 
-        # Step 1) Embed the query using OpenAI Ada embeddings (1536 dims)
+        # Step 2) WHAT SHOULD GO HERE?? Embed the query using OpenAI Ada embeddings (1536 dims)
         embedding_model = OpenAIEmbeddings(
             model="text-embedding-ada-002",
             api_key=OPENAI_API_KEY)
         query_embedding = embedding_model.embed_query(query)
 
-        # Step 2) Fetch top-K relevant chunks via Supabase RPC
+        # Step 3) Fetch top-K relevant chunks via Supabase RPC
         relevant_chunks = fetch_relevant_chunks(query_embedding, project_id)
 
-        # Step 3) Generate llm client from factory
+        # Step 4) Build the final LLM prompt (YAML + Embeddings + Num Questions)
+        chunk_context = "\n\n".join(chunk["content"] for chunk in relevant_chunks)
+
+        # Determine num_questions (if from user via metadata["num_questions"] or using YAML fallback
+        num_questions = metadata.get("num_questions")
+        if note_type == "exam_questions":
+            # If YAML used a placeholder named “n_questions”, we must supply it.
+            if num_questions and isinstance(num_questions, int) and num_questions > 0:
+                llm_input = prompt_template.format(
+                    context=chunk_context,
+                    n_questions=num_questions
+                )
+            else:
+                # No override; assume the YAML has a default. If you want a fallback,
+                # you could do: llm_input = prompt_template.format(context=chunk_context, n_questions=15)
+                llm_input = prompt_template.format(
+                    context=chunk_context,
+                    n_questions=metadata.get("num_questions", 15)
+                )
+        elif note_type == "case_brief":
+            # Case brief template only has {context} placeholder.
+            llm_input = prompt_template.format(context=chunk_context)
+
+        # Step 5) Generate llm client from factory
         from utils.llm_factory import LLMFactory       # Lazy-import heavy modules
         llm_client = LLMFactory.get_client(
             provider=provider,
@@ -243,14 +167,15 @@ def rag_note_task(
             temperature=temperature
         )
 
-        # Step 3.1) Generate answer for client
-        full_answer = generate_rag_answer(
-            llm_client=llm_client,
-            query=query,
-            relevant_chunks=relevant_chunks
-        )
+        # Step 6) Generate answer for client
+        # full_answer = generate_rag_answer(
+        #     llm_client=llm_client,
+        #     query=query,
+        #     relevant_chunks=relevant_chunks
+        # )
+        full_answer = llm_client.chat(llm_input)
 
-        # Step 4) Save note to the public.notes table in Supabase (realtime Supabase table)
+        # Step 7) Save note to the public.notes table in Supabase (realtime Supabase table)
         save_note(
             project_id,
             user_id, 
@@ -262,7 +187,7 @@ def rag_note_task(
         return "RAG Note Task suceess"
 
     except Exception as e:
-        logger.error(f"PDF processing failed: {e}", exc_info=True)
+        logger.error(f"RAG Note Task failed: {e}", exc_info=True)
         try:
             raise self.retry(exc=e)
         except MaxRetriesExceededError:
