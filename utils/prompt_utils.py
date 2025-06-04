@@ -13,6 +13,9 @@ def load_yaml_prompt(file_name: str) -> Dict[str, Any]:
     """
     Given a YAML file (just the file name, e.g. 'chat-persona-prompt.yaml'),
     load it and return a dict with keys: 'llm', 'messages' or 'template', etc.
+
+    Returns:
+        - data (Dict): ???
     """
     path = os.path.join(PROMPTS_DIR, file_name)
     if not os.path.exists(path):

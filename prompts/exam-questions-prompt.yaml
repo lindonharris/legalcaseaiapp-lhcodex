@@ -4,6 +4,9 @@ llm:                  # these are a fallback if the user does not specify a prov
   provider: openai    # "openai", "anthropic"... 
   model: gpt-4o-mini
 
+base_prompt: |
+  Generate a list of exam questions based on the following documents.
+  
 template: |
   You are a law professor writing sample exam questions. Based on the
   following legal context, please draft exactly {n_questions} multiple-choice

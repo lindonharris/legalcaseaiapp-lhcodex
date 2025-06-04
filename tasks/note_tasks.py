@@ -3,6 +3,7 @@ This file runs Celery tasks for handling RAG AI note creation tasks (outlines, s
 Note genereation (with RAG) is done without token streaming. Returns full answer in one go.
 '''
 import multiprocessing as mp
+import gc
 import traceback
 from celery import Celery, Task
 from celery.exceptions import MaxRetriesExceededError, TimeoutError
@@ -33,9 +34,11 @@ from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import CharacterTextSplitter
 
 #### GLOBAL ####
-# API Keys
+# API Keys 
 load_dotenv()
-OPENAI_API_KEY = os.environ.get("OPENAI_API_PROD_KEY")
+# # OPENAI_API_KEY = os.environ.get("OPENAI_API_PROD_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()    # ← only for embeddings
+
 
 # Logging
 logger = logging.getLogger(__name__)
@@ -88,6 +91,7 @@ def rag_note_task(
     RAG workflow for various note types (exam questions, case briefs, outlines, etc.).
 
     Steps:
+    0) Mark start time in Celery state
     1) Embed a short “retrieval” query (as dim-1536 embedding)
     2) Fetch top-K relevant chunks via Supabase RPC
     3) Load the appropriate YAML prompt based on note_type
@@ -111,53 +115,65 @@ def rag_note_task(
 
         # Step 1) Choose the prompt based on user selection of "note_type"
         if note_type == "outline":
-            query = "Create a comprehensive outline of the following documents"
+            # query = "Create a comprehensive outline of the following documents"
             yaml_file = "case-outline-prompt.yaml"
         elif note_type == "exam_questions":
-            query = "Based on the documents (appended as rag context) create an list of 15 exam questions"
+            # query = "Based on the documents (appended as rag context) create an list of 15 exam questions"
             yaml_file = "exam-questions-prompt.yaml"
         elif note_type == "case_brief":
-            query = "Based on the documents create a comprehensive case brief"
+            # query = "Based on the documents create a comprehensive case brief"
+            yaml_file = "case-brief-prompt.yaml"
         elif note_type == "compare_contrast":
-            query = "Based on the documents create a compare and contrast of the cases"
+            # query = "Based on the documents create a compare and contrast of the cases"
+            yaml_file = "compare-contrast-prompt.yaml"
         else:
             raise ValueError(f"Unknown note_type: {note_type}")
         
-        # Load that YAML
+        # Load YAML and extract “base_prompt” and “template” 
         yaml_dict = load_yaml_prompt(yaml_file)
+        base_query      = yaml_dict.get("base_prompt")
         prompt_template = build_prompt_template_from_yaml(yaml_dict)
+        if not base_query:
+            raise KeyError(f"`base_prompt` not found in {yaml_file}")
 
-        # Step 2) WHAT SHOULD GO HERE?? Embed the query using OpenAI Ada embeddings (1536 dims)
+        # Step 2) Embed the short base query using OpenAI Ada embeddings (1536 dims)
         embedding_model = OpenAIEmbeddings(
             model="text-embedding-ada-002",
-            api_key=OPENAI_API_KEY)
-        query_embedding = embedding_model.embed_query(query)
+            api_key=OPENAI_API_KEY,
+        )
+        query_embedding = embedding_model.embed_query(base_query)
 
-        # Step 3) Fetch top-K relevant chunks via Supabase RPC
+        # Step 3) Fetch top-K relevant chunks via Supabase RPC && Format for llm context window
         relevant_chunks = fetch_relevant_chunks(query_embedding, project_id)
-
-        # Step 4) Build the final LLM prompt (YAML + Embeddings + Num Questions)
         chunk_context = "\n\n".join(chunk["content"] for chunk in relevant_chunks)
 
-        # Determine num_questions (if from user via metadata["num_questions"] or using YAML fallback
-        num_questions = metadata.get("num_questions")
+        # Step 4) Question-type specific adjustments (question number, legal course name, what ever idiosyncracies you can think of)
         if note_type == "exam_questions":
-            # If YAML used a placeholder named “n_questions”, we must supply it.
+            # Decide how many questions to generate (override via metadata)
+            num_questions = metadata.get("num_questions")
             if num_questions and isinstance(num_questions, int) and num_questions > 0:
                 llm_input = prompt_template.format(
                     context=chunk_context,
                     n_questions=num_questions
                 )
             else:
-                # No override; assume the YAML has a default. If you want a fallback,
-                # you could do: llm_input = prompt_template.format(context=chunk_context, n_questions=15)
+                # fallback to YAML default of 15 if no override
                 llm_input = prompt_template.format(
                     context=chunk_context,
                     n_questions=metadata.get("num_questions", 15)
                 )
+
         elif note_type == "case_brief":
-            # Case brief template only has {context} placeholder.
+            # YAML template only needs {context}
             llm_input = prompt_template.format(context=chunk_context)
+
+        elif note_type == "outline":
+            # Assuming your "case-outline-prompt.yaml" has only {context}
+            llm_input = prompt_template.format(context=chunk_context)
+
+        else:
+            # (We already checked above, but safe‐guard here)
+            raise ValueError(f"Unsupported note_type: {note_type}")
 
         # Step 5) Generate llm client from factory
         from utils.llm_factory import LLMFactory       # Lazy-import heavy modules
@@ -168,11 +184,6 @@ def rag_note_task(
         )
 
         # Step 6) Generate answer for client
-        # full_answer = generate_rag_answer(
-        #     llm_client=llm_client,
-        #     query=query,
-        #     relevant_chunks=relevant_chunks
-        # )
         full_answer = llm_client.chat(llm_input)
 
         # Step 7) Save note to the public.notes table in Supabase (realtime Supabase table)
@@ -182,6 +193,13 @@ def rag_note_task(
             note_type, 
             content=full_answer      # full rag reponse
         )
+
+        # Garbage collect cleanup and return success (proactively release large in-memory buffers)
+        try:
+            del relevant_chunks, chunk_context, llm_input, full_answer
+        except NameError:
+            pass
+        gc.collect()
 
         # Return nothing
         return "RAG Note Task suceess"
@@ -194,6 +212,7 @@ def rag_note_task(
             raise RuntimeError(
                 f"[CELERY] Step 2) RAG Note creattion failed permanently after {self.max_retries} retries: {e}"
             ) from e
+
 
 def fetch_relevant_chunks(query_embedding, project_id, match_count=10):
     """
@@ -209,6 +228,7 @@ def fetch_relevant_chunks(query_embedding, project_id, match_count=10):
     except Exception as e:
         logger.error(f"Error fetching relevant chunks: {e}", exc_info=True)
         raise
+
 
 def generate_rag_answer(
         llm_client,
@@ -251,83 +271,6 @@ def generate_rag_answer(
         logger.error(f"Error in LLM call (model={llm_client.model_name}): {e}", exc_info=True)
         raise
 
-def create_new_conversation(user_id, project_id):
-    """
-    Inserts a new row into chat_session and returns its UUID... for now not in use (using WeWeb to insert a new convo)
-    """
-    new_chat_session = {
-        "user_id": user_id,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "project_id": project_id
-    }
-    response = supabase_client.table("chat_session").insert(new_chat_session).execute()
-    return response.data[0]["id"]
-
-def restart_conversation(user_id: str, project_id: str) -> str:
-    """
-    Creates a new chat session in public.chat_sessions, updates the 
-    chat_session_id in public.projects, then deletes the old session.
-    
-    Returns the new chat_session_id.
-    """
-    # 1) Fetch the old session id for this project
-    proj_res = (
-        supabase_client
-        .table("projects")
-        .select("chat_session_id")
-        .eq("id", project_id)
-        .single()
-        .execute()
-    )
-    if proj_res.error:
-        raise RuntimeError(f"Error fetching project: {proj_res.error.message}")
-    
-    old_session_id = proj_res.data["chat_session_id"]
-    
-    # 2) Insert a new chat_sessions row
-    new_chat_session = {
-        "user_id": user_id,
-        "project_id": project_id,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    insert_res = (
-        supabase_client
-        .table("chat_sessions")
-        .insert(new_chat_session)
-        .execute()
-    )
-    if insert_res.error:
-        raise RuntimeError(f"Error creating chat session: {insert_res.error.message}")
-    
-    # Supabase returns a list of inserted rows
-    new_session_id = insert_res.data[0]["id"]
-    
-    # 3) Update the project to point to the new session
-    update_res = (
-        supabase_client
-        .table("projects")
-        .update({"chat_session_id": new_session_id})
-        .eq("id", project_id)
-        .execute()
-    )
-    if update_res.error:
-        raise RuntimeError(f"Error updating project: {update_res.error.message}")
-    
-    # 4) Delete the old chat session
-    #    (only if it existed in the first place)
-    if old_session_id:
-        delete_res = (
-            supabase_client
-            .table("chat_sessions")
-            .delete()
-            .eq("id", old_session_id)
-            .execute()
-        )
-        if delete_res.error:
-            raise RuntimeError(f"Error deleting old session: {delete_res.error.message}")
-    
-    return new_session_id
-
 
 def save_note(
         project_id, 
@@ -349,18 +292,6 @@ def save_note(
         created_at=datetime.now(timezone.utc).isoformat()
     )
 
-# def fetch_chat_history(chat_session_id):
-#     """
-#     Returns ordered list of message dicts for a conversation.
-#     """
-#     response = supabase_client.table("messages").select("*").eq("chat_session_id", chat_session_id).order("created_at").execute()
-#     return response.data
-
-# def format_chat_history(chat_history):
-#     """
-#     Converts list of messages to a single string for prompt context.
-#     """
-#     return "".join(f"{m['message_role'].capitalize()}: {m['message_content']}\n" for m in chat_history)
 
 def trim_context_length(full_context, query, relevant_chunks, model_name, max_tokens):
     model_to_encoding = {

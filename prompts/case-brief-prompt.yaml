@@ -1,0 +1,29 @@
+# prompts/case-brief-prompt.yaml
+
+llm:
+  provider: openai
+  model: gpt-4o-mini
+
+base_prompt: |
+  Generate a concise case brief from the following documents.
+
+template: |
+  You are a law clerk. Given the following context (relevant document passages below),
+  produce a “Case Brief” with these headings, in Markdown:
+  
+  1. Case Name  
+  2. Facts  
+  3. Procedural History  
+  4. Issue  
+  5. Holding  
+  6. Reasoning  
+  7. Disposition  
+
+  Relevant Context:
+  {context}
+
+  Write a concise, bullet-pointed case brief.
+
+output_format:
+  type: markdown
+  wrapper: "```"

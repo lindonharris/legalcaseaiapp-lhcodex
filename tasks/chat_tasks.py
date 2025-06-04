@@ -106,6 +106,7 @@ def get_chat_llm(
 
     return ChatOpenAI(**llm_kwargs)
 
+
 @celery_app.task(bind=True, base=BaseTaskWithRetry)
 def new_chat_session(self, user_id, project_id):
     """
@@ -140,6 +141,85 @@ def new_chat_session(self, user_id, project_id):
         # Retry on failure according to BaseTaskWithRetry policies
         raise self.retry(exc=e)
 
+# def create_new_conversation(user_id, project_id):
+#     """
+#     🆕 Inserts a new row into chat_session and returns its UUID... for now not in use (using WeWeb to insert a new convo)
+#     """
+#     new_chat_session = {
+#         "user_id": user_id,
+#         "created_at": datetime.now(timezone.utc).isoformat(),
+#         "project_id": project_id
+#     }
+#     response = supabase_client.table("chat_session").insert(new_chat_session).execute()
+#     return response.data[0]["id"]
+
+def restart_chat_session(user_id: str, project_id: str) -> str:
+    """
+    🔃 Creates a new chat session in public.chat_sessions, updates the 
+    chat_session_id in public.projects, then deletes the old session.
+    
+    Returns the new chat_session_id.
+    """
+    # 1) Fetch the old session id for this project
+    proj_res = (
+        supabase_client
+        .table("projects")
+        .select("chat_session_id")
+        .eq("id", project_id)
+        .single()
+        .execute()
+    )
+    if proj_res.error:
+        raise RuntimeError(f"Error fetching project: {proj_res.error.message}")
+    
+    old_session_id = proj_res.data["chat_session_id"]
+    
+    # 2) Insert a new chat_sessions row
+    new_chat_session = {
+        "user_id": user_id,
+        "project_id": project_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    insert_res = (
+        supabase_client
+        .table("chat_sessions")
+        .insert(new_chat_session)
+        .execute()
+    )
+    if insert_res.error:
+        raise RuntimeError(f"Error creating chat session: {insert_res.error.message}")
+    
+    # Supabase returns a list of inserted rows
+    new_session_id = insert_res.data[0]["id"]
+    
+    # 3) Update the project to point to the new session
+    update_res = (
+        supabase_client
+        .table("projects")
+        .update({"chat_session_id": new_session_id})
+        .eq("id", project_id)
+        .execute()
+    )
+    if update_res.error:
+        raise RuntimeError(f"Error updating project: {update_res.error.message}")
+    
+    # 4) Delete the old chat session
+    #    (only if it existed in the first place)
+    if old_session_id:
+        delete_res = (
+            supabase_client
+            .table("chat_sessions")
+            .delete()
+            .eq("id", old_session_id)
+            .execute()
+        )
+        if delete_res.error:
+            raise RuntimeError(f"Error deleting old session: {delete_res.error.message}")
+    
+    return new_session_id
+
+
+
 @celery_app.task(bind=True, base=BaseTaskWithRetry)
 def persist_user_query(self, user_id, chat_session_id, query, project_id, model_name):
     """
@@ -173,6 +253,7 @@ def persist_user_query(self, user_id, chat_session_id, query, project_id, model_
     except Exception as e:
         logger.error(f"RAG Chat Task failed: {e}", exc_info=True)
         raise self.retry(exc=e)
+
 
 @celery_app.task(bind=True, base=BaseTaskWithRetry)
 def rag_chat_task(

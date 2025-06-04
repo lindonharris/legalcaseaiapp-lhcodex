@@ -735,7 +735,9 @@ async def embedding_pipeline_task_status(
 @app.get("/rag-chat-status/{task_id}")
 async def get_rag_chat_status(task_id: str):
     """
-    Check task status and result of the rag_chat_task.run() task.
+    Check task status and result of the:
+        rag_chat_task.run() task
+        rag_note_task.apply_async()... aka  POST/generate-ai-note/
     Includes timeout if stuck in PENDING > 20s    
     """
     # A proxy object that allows you to fetch the status and result of any Celery task
