@@ -13,7 +13,7 @@ try:
 except ImportError:
     raise ImportError("Please install python-docx (pip install python-docx)")
 
-class DocLoader(BaseDocumentLoader):
+class DocxLoader(BaseDocumentLoader):
     """
     Handles both .doc and .docx files. If given a .doc, it uses
     LibreOffice (headless) to convert it to .docx first, then uses python-docx.
