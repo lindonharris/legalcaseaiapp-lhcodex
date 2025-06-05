@@ -149,8 +149,34 @@ def process_document_task(self, files, metadata=None):
                             'message': f'Downloading file {idx + 1}/{len(files)}'
                         }
                     )
-                    resp = requests.get(file_url )
-                    resp.raise_for_status()
+
+                    # GET/ Request and server "spoofing"
+                    # resp = requests.get( file_url )
+                    # resp.raise_for_status()
+                    try:
+                        headers = {
+                            "User-Agent": (
+                                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                "Chrome/114.0.0.0 Safari/537.36"
+                            )
+                        }
+                        resp = requests.get(file_url, headers=headers, timeout=30)
+                        resp.raise_for_status()
+                    except requests.exceptions.HTTPError as he:
+                        status = he.response.status_code if he.response is not None else "N/A"
+                        err_msg = f"{status} error downloading {file_url}"
+                        logger.error(f"[file loop] Failed downloading '{file_url}': {err_msg}")
+                        update_db_poll_status("FAILED", error_message=err_msg)
+                        failed_files += 1
+                        continue
+                    except Exception as e:
+                        err_msg = f"Download exception for {file_url}: {e}"
+                        logger.error(f"[file loop] {err_msg}", exc_info=True)
+                        update_db_poll_status("FAILED", error_message=err_msg)
+                        failed_files += 1
+                        continue
+
                     ext = os.path.splitext(file_url)[1].lower()     # <-- persisted in DB & used in loader_factory
                     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ext) 
                     tmp.write(resp.content)
