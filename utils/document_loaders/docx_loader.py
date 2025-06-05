@@ -1,9 +1,17 @@
 # utils/document_loaders/docx_loader.py
 
-from typing import List, Dict
+import os
+import subprocess
+import tempfile
+from typing import List
+
+from langchain.schema import Document
 from .base import BaseDocumentLoader
-from langchain.schema import Document  # or you can define your own simple Document
-import docx  # pip install python‐docx
+
+try:
+    import docx  # python-docx
+except ImportError:
+    raise ImportError("Please install python-docx: pip install python-docx")
 
 class DocxLoader(BaseDocumentLoader):
     def load_documents(self, path: str) -> List[Document]:

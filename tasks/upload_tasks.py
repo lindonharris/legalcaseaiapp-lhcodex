@@ -151,8 +151,8 @@ def process_document_task(self, files, metadata=None):
                     )
                     resp = requests.get(file_url )
                     resp.raise_for_status()
-                    ext = os.path.splitext(file_url)[1].lower()
-                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
+                    ext = os.path.splitext(file_url)[1].lower()     # <-- persisted in DB & used in loader_factory
+                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ext) 
                     tmp.write(resp.content)
                     tmp.close()
                     file_path = tmp.name
@@ -178,14 +178,16 @@ def process_document_task(self, files, metadata=None):
                 # get CloudFront URL
                 url = get_cloudfront_url(key)
 
+                # Define rows to insert into document_sources table
                 rows_to_insert.append({
                     "cdn_url": url,
                     "project_id": str(metadata["project_id"]),
                     "content_tags": ["Fitness", "Health", "Wearables"],
                     "uploaded_by": str(metadata["user_id"]), 
                     "vector_embed_status": "INITIALIZING",  # New initial status
-                    "filename": file.split('/')[-1],  # Store original filename
+                    "filename": file_url.split('/')[-1],  # Store original filename
                     "file_size_bytes": os.path.getsize(file_path),  # Store file size for reference
+                    "file_extension": ext,
                     "created_at": datetime.now(timezone.utc).isoformat()
                 })
                 temp_paths.append(file_path)
@@ -195,14 +197,14 @@ def process_document_task(self, files, metadata=None):
 
             except Exception as e:
                 failed_files += 1
-                logger.error(f"[file loop] Failed processing '{file}': {e}", exc_info=True)
+                logger.error(f"[file loop] Failed processing '{file_url}': {e}", exc_info=True)
                 # Update the task state with error information
                 self.update_state(
                     state='PROCESSING',
                     meta={
                         'start_time': task_start_time,
                         'stage': 'FILE_PROCESSING_ERROR',
-                        'current_file': file.split('/')[-1] if '/' in file else file,
+                        'current_file': file_url.split('/')[-1] if '/' in file_url else file_url,
                         'error_message': str(e),
                         'successful_files': successful_files,
                         'failed_files': failed_files,
@@ -510,9 +512,13 @@ def chunk_and_embed_task(
 
         # 6) Bulk insert into Supabase
         logger.debug("Attempting Supabase bulk vector insert into public.document_vector_store.")
-        response = supabase_client.table("document_vector_store") \
-                            .insert(vector_rows) \
-                            .execute()
+        response = (
+            supabase_client
+            .table("document_vector_store")
+            .insert(vector_rows)
+            .select("*")      # <— tell Supabase to return all columns, avoids blank `columns=`
+            .execute()
+        )
         
         # Update status to COMPLETE after successful vector insert
         update_db_poll_status("COMPLETE", source_id)
