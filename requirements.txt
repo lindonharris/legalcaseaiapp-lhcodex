@@ -1,13 +1,15 @@
 gradio
 python-dotenv
 pandas
-pypdf
 loguru
-promptic
+psutil
+
+# Document parsing dependencies
+textract==1.6.5
 tenacity
+pypdf
 PyPDF2
 # PyPDF2==3.0.1
-psutil
 
 # AI dependencies
 openai
@@ -35,4 +37,5 @@ supabase
 langchain 
 langchain-community
 langchain-openai
+promptic
 

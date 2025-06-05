@@ -11,7 +11,6 @@ import json
 import psutil
 import requests
 import tempfile
-import tiktoken
 from typing import List
 from tasks.note_tasks import rag_note_task 
 from tasks.celery_app import celery_app  # Import the Celery app instance (see celery_app.py for LocalHost config)
@@ -19,7 +18,6 @@ from utils.audio_utils import generate_audio, generate_only_dialogue_text
 from utils.s3_utils import upload_to_s3, generate_presigned_url, s3_client, s3_bucket_name
 from utils.supabase_utils import insert_document_supabase_record, insert_mp3_supabase_record, insert_vector_supabase_record, supabase_client
 from utils.cloudfront_utils import get_cloudfront_url
-from utils.document_loaders.loader_factory import get_loader_for
 from utils.instruction_templates import INSTRUCTION_TEMPLATES
 from time import sleep
 from datetime import datetime, timezone
@@ -35,12 +33,6 @@ from openai import OpenAIError
 # API Keys
 load_dotenv()
 OPENAI_API_KEY = os.environ.get("OPENAI_API_PROD_KEY")
-
-# Initialize the tokenizer globally, for token counting 
-try:
-    tokenizer = tiktoken.encoding_for_model("text-embedding-ada-002")
-except KeyError:
-    tokenizer = tiktoken.get_encoding("cl100k_base")
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +64,7 @@ def update_db_poll_status(status: str, source_id: str, error_message: str = None
         logger.critical(f"[DB] Failed to update status for {source_id}: {db_e}", exc_info=True)
 
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
-def process_document_task(self, files, metadata=None):
+def process_pdf_task(self, files, metadata=None):
     """
     Main Celery task to:
         1) upload PDFs to S3, 
@@ -81,16 +73,15 @@ def process_document_task(self, files, metadata=None):
     Includes enhanced status tracking.
 
     Args:
-        files (List): Containing file CDN urls (created by WeWeb's document upload element)
-        metadata (json): {
-            'user_id': UUID,
-            'project_id': UUID,
-            'provider': 'anthropic...', 'meta'...,
-            'model_name': 'gpt-4o-mini', 'llama3.1'...,
-            'temparature': '0.7', ...,
-            'note_type': 'case_summary'
-    Return:
-        ???
+    files (List): Containing file CDN urls (created by WeWeb's document upload element)
+    metadata (json): {
+        'user_id': UUID,
+        'project_id': UUID,
+        'provider': 'anthropic...', 'meta'...,
+        'model_name': 'gpt-4o-mini', 'llama3.1'...,
+        'temparature': '0.7', ...,
+        'note_type': 'case_summary'
+
     """
     try:
         # Initialize task-level state that will be accessible via results = AsyncResult(task_id)
@@ -123,7 +114,7 @@ def process_document_task(self, files, metadata=None):
         successful_files = 0
         failed_files = 0
 
-        # === 1) Download from WeWeb CDN & upload each file to AWS S3===
+        # === 1) Download & upload each file ===
         self.update_state(
             state='PROCESSING',
             meta={
@@ -135,29 +126,28 @@ def process_document_task(self, files, metadata=None):
             }
         )
 
-        for idx, file_url  in enumerate(files):
+        for idx, file in enumerate(files):
             try:
                 # download or read locally
-                if file_url .lower().startswith(("http://", "https://")):
+                if file.lower().startswith(("http://", "https://")):
                     self.update_state(
                         state='PROCESSING',
                         meta={
                             'stage': 'DOWNLOADING',
-                            'current_file': file_url .split('/')[-1],
+                            'current_file': file.split('/')[-1],
                             'current_file_index': idx + 1,
                             'total_files': len(files),
                             'message': f'Downloading file {idx + 1}/{len(files)}'
                         }
                     )
-                    resp = requests.get(file_url )
+                    resp = requests.get(file)
                     resp.raise_for_status()
-                    ext = os.path.splitext(file_url)[1].lower()
-                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
+                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
                     tmp.write(resp.content)
                     tmp.close()
                     file_path = tmp.name
                 else:
-                    file_path = file_url 
+                    file_path = file
 
                 # upload to S3
                 self.update_state(
@@ -165,7 +155,7 @@ def process_document_task(self, files, metadata=None):
                     meta={
                         'start_time': task_start_time,
                         'stage': 'UPLOADING_TO_S3',
-                        'current_file': file_url.split('/')[-1],
+                        'current_file': file.split('/')[-1],
                         'current_file_index': idx + 1,
                         'total_files': len(files),
                         'message': f'Uploading file {idx + 1}/{len(files)} to S3'
@@ -318,7 +308,7 @@ def process_document_task(self, files, metadata=None):
         embedding_tasks = [
             chunk_and_embed_task.s(
                 row["cdn_url"],                 # Pass the CDN URL
-                sid,                            # Pass the source_id from the DB insert into public.document_sources
+                sid,                            # Pass the source_id from the DB insert
                 metadata["project_id"]          # Pass the project_id
             )
             for sid, row in zip(source_ids, rows_to_insert)
@@ -362,7 +352,7 @@ def process_document_task(self, files, metadata=None):
     
     except Exception as e:
         # this catches anything that bubbled out of your inner logic
-        logger.error(f"Overall process_document_task failed: {e}", exc_info=True)
+        logger.error(f"Overall process_pdf_task failed: {e}", exc_info=True)
 
         try:
             # Update state before retry
@@ -380,7 +370,7 @@ def process_document_task(self, files, metadata=None):
         except MaxRetriesExceededError:
             # once retries are exhausted, raise a clear runtime error
             logger.critical(
-                f"[CELERY] process_document_task failed permanently after {self.max_retries} retries: {e}"
+                f"[CELERY] process_pdf_task failed permanently after {self.max_retries} retries: {e}"
             )
             # Update final failure state 
             self.update_state(
@@ -396,73 +386,41 @@ def process_document_task(self, files, metadata=None):
                 }
             )
             raise RuntimeError(
-                f"[CELERY] process_document_task failed permanently after {self.max_retries} retries: {e}"
+                f"[CELERY] process_pdf_task failed permanently after {self.max_retries} retries: {e}"
             ) from e
 
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
-def chunk_and_embed_task(
-    self, 
-    doc_url, 
-    source_id, 
-    project_id, 
-    chunk_size=1000, 
-    chunk_overlap=100
-):
+def chunk_and_embed_task(self, pdf_url, source_id, project_id, chunk_size=1000, chunk_overlap=100):
     """
-    Celery task to:
-        - download ANY document (pdf, docx, epub, etc.)
-        - load & split into chunks
-        - embed & store embeddings
-
-    Args:
-        pdf_url (str): weweb upload element cdn utl
-        source_id (str): uuid generated by insert into public.document_sources
-        project_id (str): uuid for project_id
-        chunk_size (int): size of document chunks
-        chunk_overlap (int): overlap between document chunks 
-
-    Returns:
-        None
+    Celery task to download, chunk, embed, and store embeddings of a PDF in Supabase. This step involved reading
+    the PDF contents with PyPDFLoader, but will need to be expanded to handle (.doc, .txt, .pdf (OCR), and .epub)
     """
     temp_file = None
 
     try:
-        logger.info(f"Starting chunk_and_embed_task for URL: {doc_url}, source_id: {str(source_id)}")
+        logger.info(f"Starting chunk_and_embed_task for URL: {pdf_url}, source_id: {str(source_id)}")
+
         update_db_poll_status("EMBEDDING", source_id)
 
-        # 1) Download the file
-        resp = requests.get(doc_url)
-        resp.raise_for_status()
-        # Use suffix based on the URL’s extension so factory can pick loader
-        suffix = os.path.splitext(doc_url)[1].lower()
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-        temp_file.write(resp.content)
+        # 1) Download PDF from URL using a temp file
+        response = requests.get(pdf_url)
+        response.raise_for_status()
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+        temp_file.write(response.content)
         temp_file.close()
-        local_path = temp_file.name
 
-        # 2) Use factory to get correct loader and load “documents”
-        try:
-            loader = get_loader_for(local_path)
-        except ValueError as e:
-            # Mark as failed in DB and raise so the task can retry or fail cleanly
-            update_db_poll_status("FAILED", source_id, error_message=str(e))
-            raise
-
-        all_docs = loader.load_documents(local_path)
-        if not all_docs:
-            raise RuntimeError(f"No pages extracted from {local_path}")
-
-        # 3) Split into chunks using CharacterTextSplitter
+        # 2) Load & split into chunks
+        loader = PyPDFLoader(temp_file.name)
+        documents = loader.load()
         text_splitter = CharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-        chunks = text_splitter.split_documents(all_docs)
+        chunks = text_splitter.split_documents(documents)
 
-        # 4) Prepare texts & metadata for embedding
+        # 3) Prepare texts and metadata for batch embedding
         texts = [chunk.page_content for chunk in chunks]
         metadatas = [
             {
-                "source": doc_url,
-                # If your loader gave a “page” or “chapter” in metadata, preserve that:
-                **{k: chunk.metadata.get(k) for k in chunk.metadata}
+                "source": pdf_url,
+                "page_number": chunk.metadata.get("page", None)
             }
             for chunk in chunks
         ]
@@ -474,22 +432,22 @@ def chunk_and_embed_task(
         )
         embeddings = embedding_model.embed_documents(texts)
 
-        # Guard against any mis-shaped vector dimensions (ada-002 produces dim-1536)
-        expected_embedding_length = 1536  
+        # Guard against any mis-shaped vector dimensions
+        expected_embedding_length = 1536   # ada-002 produces 1536 dimensions
         for i, vec in enumerate(embeddings):
             if len(vec) != expected_embedding_length:
                 raise ValueError(f"Embedding #{i} has length {len(vec)}; expected {expected_embedding_length}")
 
         # 5) Build rows for bulk insert
         def _clean(s: str) -> str:
-            ''' Helper to remove literal NULLs and other problematic control characters if needed''' 
+            # remove literal NULLs and other problematic control characters if needed
             # For this specific error, '\x00' is the key.
             return s.replace('\x00', '')
         
+        # 5.1) Build rows for bulk insert
         vector_rows = []
         for text, meta, vector in zip(texts, metadatas, embeddings):
             clean_text = _clean(text)
-            num_tokens = len(tokenizer.encode(clean_text))      # tokenizer declared globally
             
             # Clean metadata values that are strings
             clean_meta = {}
@@ -504,8 +462,7 @@ def chunk_and_embed_task(
                 "content":      clean_text,
                 "metadata":     clean_meta,  # Use the cleaned metadata
                 "embedding":    vector,
-                "project_id":   str(project_id),
-                "num_tokens":   num_tokens
+                "project_id":   str(project_id)
             })
 
         # 6) Bulk insert into Supabase
@@ -513,18 +470,18 @@ def chunk_and_embed_task(
         response = supabase_client.table("document_vector_store") \
                             .insert(vector_rows) \
                             .execute()
-        
         # Update status to COMPLETE after successful vector insert
         update_db_poll_status("COMPLETE", source_id)
+
         logger.info(f"Bulk inserted {len(vector_rows)} embeddings into public.document_vector_store for source_id={source_id}")
 
     except Exception as e:
-        logger.error(f"Failed chunk/embed for {doc_url}: {e}", exc_info=True)
+        logger.error(f"Failed chunk/embed for {pdf_url}: {e}", exc_info=True)
         update_db_poll_status("FAILED", source_id, error_message=str(e))
         raise
     except OpenAIError as e:
         # Catch specific OpenAI errors for more targeted logging/handling if needed
-        logger.error(f"OpenAI API error during embedding for {doc_url}: {e}", exc_info=True)
+        logger.error(f"OpenAI API error during embedding for {pdf_url}: {e}", exc_info=True)
         update_db_poll_status("FAILED", source_id, error_message=str(e))
         raise self.retry(exc=e)
     finally:

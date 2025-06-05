@@ -1,0 +1,1 @@
+# USE LATEST OCR FRAMWORK (> Tessaract)

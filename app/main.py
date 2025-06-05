@@ -21,7 +21,7 @@ from utils.pdf_utils import extract_text_from_pdf
 from celery import chain, chord, group, states
 from celery.result import AsyncResult
 from tasks.podcast_generate_tasks import validate_and_generate_audio_task, generate_dialogue_only_task
-from tasks.upload_tasks import process_pdf_task
+from tasks.upload_tasks import process_pdf_task, process_document_task
 from tasks.test_tasks import addition_task
 from tasks.chat_streaming_tasks import rag_chat_streaming_task
 from tasks.chat_tasks import rag_chat_task, persist_user_query
@@ -342,7 +342,10 @@ async def create_new_rag_project(
             raise HTTPException(status_code=400, detail="user_id is required in metadata")
         
         # Apply async job to process PDFs → finalize_document_processing_workflow() → rag_note_task()
-        job = process_pdf_task.apply_async(
+        # job = process_pdf_task.apply_async(
+        #     args=[request.files, request.metadata]
+        # )
+        job = process_document_task.apply_async(
             args=[request.files, request.metadata]
         )
         
@@ -358,48 +361,48 @@ async def create_new_rag_project(
         logger.error(f"Error creating new RAG project: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error creating RAG project: {str(e)}")
     
-@app.post("/new-rag-and-notes/", response_model=NewRagAndNoteResponse)
-async def create_new_rag_project_and_gen_notes(
-    request: NewRagPipelineRequest, 
-    background_tasks: BackgroundTasks
-):
-    '''UNUSED...
-    Endpoint to create BOTH a RAG pipeline and a "quick action" AI note, chaining 2 celery notes together
-        - process_pdf_task():
-            input: request.files, request.metadata
-            returns: None
+# @app.post("/new-rag-and-notes/", response_model=NewRagAndNoteResponse)
+# async def create_new_rag_project_and_gen_notes(
+#     request: NewRagPipelineRequest, 
+#     background_tasks: BackgroundTasks
+# ):
+#     '''UNUSED...
+#     Endpoint to create BOTH a RAG pipeline and a "quick action" AI note, chaining 2 celery notes together
+#         - process_pdf_task():
+#             input: request.files, request.metadata
+#             returns: None
 
-        - rag_note_task():
-            input: request.metadata
-            returns: None
+#         - rag_note_task():
+#             input: request.metadata
+#             returns: None
         
-    Request contains:
-        request.files (List): list of pdf file links
-        request.metadata (json): {
-            project_id:
-            provider:
-            model_name:
-            temperature:
-        }
-    '''
-    try:
-        # 1) Kick off a chain: upload → note
-        workflow = chain(
-            process_pdf_task.s(request.files, request.metadata),
-            rag_note_task.s(
-                request.metadata["user_id"],            # ← 
-                request.metadata["chat_session_id"],    # ← 
-                request.metadata["note_type"],          # ← maps to note_type (e.g. "create an pros/cons outline of this case…")
-                request.metadata["project_id"],         # ← 
-                request.metadata["model_name"],          # ←
-                request.metadata["addtl_params"],
-            )
-        )
-        result: AsyncResult = workflow.apply_async()
-        return {"workflow_id": result.id}
+#     Request contains:
+#         request.files (List): list of pdf file links
+#         request.metadata (json): {
+#             project_id:
+#             provider:
+#             model_name:
+#             temperature:
+#         }
+#     '''
+#     try:
+#         # 1) Kick off a chain: upload → note
+#         workflow = chain(
+#             process_pdf_task.s(request.files, request.metadata),
+#             rag_note_task.s(
+#                 request.metadata["user_id"],            # ← 
+#                 request.metadata["chat_session_id"],    # ← 
+#                 request.metadata["note_type"],          # ← maps to note_type (e.g. "create an pros/cons outline of this case…")
+#                 request.metadata["project_id"],         # ← 
+#                 request.metadata["model_name"],          # ←
+#                 request.metadata["addtl_params"],
+#             )
+#         )
+#         result: AsyncResult = workflow.apply_async()
+#         return {"workflow_id": result.id}
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/generate-ai-note/", response_model=GenericTaskResponse)
 async def generate_ai_note(
@@ -457,7 +460,7 @@ async def append_sources_to_project(request: NewRagPipelineRequest, background_t
     '''
     try:
         # Create signatures for the tasks
-        process_pdf_task_signature = process_pdf_task.s(request.files, request.metadata)        # Upload PDFs to AWS S3, and Supabase
+        process_pdf_task_signature = process_document_task.s(request.files, request.metadata)        # Upload PDFs to AWS S3, and Supabase
         # validate_and_generate_audio_task_signature = validate_and_generate_audio_task.s(request.files, request.metadata)
 
         # Create the group
@@ -822,7 +825,7 @@ async def pdf_to_dialogue(request: PDFRequest, background_tasks: BackgroundTasks
     '''
     try:
         # Create signatures for the tasks
-        process_pdf_task_signature = process_pdf_task.s(request.files, request.metadata)
+        process_pdf_task_signature = process_document_task.s(request.files, request.metadata)
         validate_and_generate_audio_task_signature = validate_and_generate_audio_task.s(request.files, request.metadata)
 
         # Create the group
