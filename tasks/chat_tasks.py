@@ -22,6 +22,8 @@ import json
 import tiktoken
 from dotenv import load_dotenv
 from langchain.callbacks.base import BaseCallbackHandler
+from utils.prompt_utils import load_yaml_prompt, build_chat_messages_from_yaml
+
 
 #### GLOBAL ####
 # API Keys
@@ -374,29 +376,58 @@ def generate_rag_answer(
     Build prompt, invoke LLM, return the full generated answer at completion.
     """
     
-    # Build conversational context
+    # # Build conversational context
+    # chat_history = fetch_chat_history(chat_session_id)[-max_chat_history:]
+    # formatted_history = format_chat_history(chat_history) if chat_history else ""
+    # chunk_context = "\n\n".join(c["content"] for c in relevant_chunks)
+
+    # full_context = (
+    #     f"{formatted_history}\n\nRelevant Context:\n{chunk_context}\n\n"
+    #     f"User Query: {query}\nAssistant:"
+    # )
+
+    # Step 2) Load “system” messages from YAML and concatenate them
+    try:
+        # Adjust this filename if yours is named differently
+        yaml_dict = load_yaml_prompt("chat-persona-prompt.yaml")
+        sys_msgs: list = build_chat_messages_from_yaml(yaml_dict)
+        # sys_msgs is a list of {"role": "system", "content": "..."}
+        # We only care about content (each is already a block of text)
+        system_instructions = "\n\n".join(msg["content"] for msg in sys_msgs if msg["role"] == "system")
+    except Exception as e:
+        # If anything goes wrong loading YAML, fallback to empty system instructions
+        logger.warning(f"Unable to load system instructions YAML: {e}")
+        system_instructions = ""
+
+    # Step 2) Build conversational context from chat history + chunks
     chat_history = fetch_chat_history(chat_session_id)[-max_chat_history:]
     formatted_history = format_chat_history(chat_history) if chat_history else ""
     chunk_context = "\n\n".join(c["content"] for c in relevant_chunks)
 
-    full_context = (
-        f"{formatted_history}\n\nRelevant Context:\n{chunk_context}\n\n"
+    # Step 3) Stitch everything: (1) system instructions, (2) chat history, (3) relevant context, (4) user query
+    # ────────────────────────────────────────────────────────────
+    user_context = (
+        f"{formatted_history}\n\n"
+        f"Relevant Context:\n{chunk_context}\n\n"
         f"User Query: {query}\nAssistant:"
     )
 
-    trimmed_context = trim_context_length(
-        full_context=full_context,
+    # trim in case caht context is too long...
+    trimmed_user_context = trim_context_length(
+        full_context=user_context,
         query=query,
         relevant_chunks=relevant_chunks,
         model_name=llm_client.model_name,
         max_tokens=127999
     )
 
+    # Then, prepend the un‐trimmed system instructions in front
+    prompt_body = f"{system_instructions}\n\n{trimmed_user_context}"
+
     # 5) Finally, call the LLM client once
     try:
         # All of your LLMClient implementations expose `.chat(prompt: str) -> str`
-        answer = llm_client.chat(trimmed_context)
-        # llm_client = get_chat_llm(model_name) # being SUNSET !!! 
+        answer = llm_client.chat(prompt_body)
         return answer
     except Exception as e:
         logger.error(f"Error in LLM call (model={llm_client.model_name}): {e}", exc_info=True)

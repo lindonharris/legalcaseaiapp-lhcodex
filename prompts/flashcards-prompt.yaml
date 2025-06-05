@@ -5,7 +5,7 @@ llm:                  # these are a fallback if the user does not specify a prov
   model: gpt-4o-mini
 
 base_prompt: |
-  Generate a list of exam questions based on the following documents.
+  Based on the documents (appended as rag context) create an list of 15 flashcards covering core concepts.
   
 template: |
   You are a law professor writing sample exam questions. Based on the
@@ -44,12 +44,6 @@ template: |
   
   Legal Context:
   {context}
-
-abbreviations: 
-  When using abbreviations clarify the first time the abbreviation is used (e.g., “SCOTUS” = Supreme Court of the United States”
-
-escape_hatch: 
-  if you cannot find adequate information to adquately asnwer the prompt, please return (not enouch sources)
 
 output_format:
   type: markdown

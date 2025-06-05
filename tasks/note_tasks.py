@@ -85,7 +85,7 @@ def rag_note_task(
     provider: str,  # ← “openai”, “anthropic”, etc.
     model_name: str,
     temperature: float = 0.7,
-    metadata: dict = None,      # <-- a dict containing optional overrides, like {"num_questions": 10}
+    addtl_params: dict = None,      # <-- a dict containing optional overrides, like {"num_questions": 10, "document_ids":[...]}
 ):
     """
     RAG workflow for various note types (exam questions, case briefs, outlines, etc.).
@@ -100,8 +100,8 @@ def rag_note_task(
     6) Persist note output to public.notes
     """
     
-    if metadata is None:
-        metadata = {}
+    if addtl_params is None:
+        addtl_params = {}
     
     try:
         # Step 0) Mark explicit start time in self.metadata
@@ -126,6 +126,9 @@ def rag_note_task(
         elif note_type == "compare_contrast":
             # query = "Based on the documents create a compare and contrast of the cases"
             yaml_file = "compare-contrast-prompt.yaml"
+        elif note_type == "flashcards":
+            # query = "Based on the documents (appended as rag context) create an list of 15 flashcards covering core concepts"
+            yaml_file = "flashcards-prompt.yaml"
         else:
             raise ValueError(f"Unknown note_type: {note_type}")
         
@@ -149,8 +152,8 @@ def rag_note_task(
 
         # Step 4) Question-type specific adjustments (question number, legal course name, what ever idiosyncracies you can think of)
         if note_type == "exam_questions":
-            # Decide how many questions to generate (override via metadata)
-            num_questions = metadata.get("num_questions")
+            # Decide how many questions to generate (override via addtl_params)
+            num_questions = addtl_params.get("num_questions")
             if num_questions and isinstance(num_questions, int) and num_questions > 0:
                 llm_input = prompt_template.format(
                     context=chunk_context,
@@ -160,7 +163,7 @@ def rag_note_task(
                 # fallback to YAML default of 15 if no override
                 llm_input = prompt_template.format(
                     context=chunk_context,
-                    n_questions=metadata.get("num_questions", 15)
+                    n_questions=addtl_params.get("num_questions", 15)
                 )
 
         elif note_type == "case_brief":

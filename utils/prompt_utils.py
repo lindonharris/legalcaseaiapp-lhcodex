@@ -5,6 +5,7 @@ import yaml
 from typing import Dict, Any
 from langchain.prompts import PromptTemplate
 
+
 # Where your YAML lives
 PROMPTS_DIR = os.path.join(os.path.dirname(__file__), "..", "prompts")
 
@@ -30,6 +31,15 @@ def build_chat_messages_from_yaml(yaml_dict: Dict[str, Any]) -> list:
     Given a loaded YAML dict (with a 'messages' key), return a
     list of dicts [ {"role": "...", "content": "..."}, ... ] that you
     can pass into a chat‐style API or stitch into a single string.
+
+    e.g. return
+
+    [
+        {"role": "system", "content": "[PERSONA] …"},
+        {"role": "system", "content": "[EXAMPLE OUTPUTS] …"},
+        {"role": "system", "content": "[IMPORTANT NOTES] …"},
+        {"role": "system", "content": "[ESCAPE HATCH] …"},
+    ]
     """
     if "messages" not in yaml_dict:
         return []

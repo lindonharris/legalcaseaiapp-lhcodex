@@ -318,6 +318,8 @@ async def create_new_rag_project(
             project_id: UUID
             model_name: string (optional) 
             note_type: string
+            ...
+            addtl_params: dict
         }
 
     Results contains:
@@ -339,7 +341,7 @@ async def create_new_rag_project(
         if not request.metadata.get('user_id'):
             raise HTTPException(status_code=400, detail="user_id is required in metadata")
         
-        # Apply async job to process PDFs
+        # Apply async job to process PDFs → finalize_document_processing_workflow() → rag_note_task()
         job = process_pdf_task.apply_async(
             args=[request.files, request.metadata]
         )
@@ -389,7 +391,8 @@ async def create_new_rag_project_and_gen_notes(
                 request.metadata["chat_session_id"],    # ← 
                 request.metadata["note_type"],          # ← maps to note_type (e.g. "create an pros/cons outline of this case…")
                 request.metadata["project_id"],         # ← 
-                request.metadata["model_name"]          # ← 
+                request.metadata["model_name"],          # ←
+                request.metadata["addtl_params"],
             )
         )
         result: AsyncResult = workflow.apply_async()
@@ -428,7 +431,7 @@ async def generate_ai_note(
                 "provider":      request.metadata["provider"],
                 "model_name":    request.metadata["model_name"],    # ← maps to your model_name param
                 "temperature":   request.metadata["temperature"],
-                "metadata":      request.metadata["metadata"]       # ← Dict passed in by weweb/postman 
+                "addtl_params":  request.metadata["addtl_params"]       # ← Dict passed in by weweb/postman 
         }
     )
         return {"task_id": job.id}

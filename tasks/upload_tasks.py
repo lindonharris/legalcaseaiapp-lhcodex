@@ -323,6 +323,7 @@ def process_pdf_task(self, files, metadata=None):
             metadata.get("provider", "openai"),
             metadata.get("model_name", "gpt-4o-mini"),   # default to gpt-4o-mini  
             metadata.get("temperature", "0.7"),
+            metadata.get("addtl_params", {}),
         )
         chord_result = chord(embedding_tasks)(callback)
         workflow_id = chord_result.id
@@ -815,6 +816,7 @@ def finalize_document_processing_workflow(
     provider: str,
     model_name: str,
     temperature: float,
+    addtl_params: dict,
 ):
     """
     Celery callback after all chunk_and_embed_task tasks in a chord complete.
@@ -883,6 +885,7 @@ def finalize_document_processing_workflow(
                     provider,
                     model_name,
                     temperature,
+                    addtl_params,
                 ])
             
             # Update a workflow status record if needed
