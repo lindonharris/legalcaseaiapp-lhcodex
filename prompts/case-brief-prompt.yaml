@@ -19,7 +19,7 @@ template: |
   6. Reasoning  
   7. Disposition  
 
-  Relevant Context:
+  Relevant Context (RAG Retrieval):
   {context}
 
   Write a concise, bullet-pointed case brief.

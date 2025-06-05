@@ -8,3 +8,4 @@ venv/
 # Additional dirs to ignore
 _temp/*
 _local/*
+test/*

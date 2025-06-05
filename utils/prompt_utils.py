@@ -49,8 +49,14 @@ def build_chat_messages_from_yaml(yaml_dict: Dict[str, Any]) -> list:
 def build_prompt_template_from_yaml(yaml_dict: Dict[str, Any]) -> PromptTemplate:
     """
     Given a loaded YAML dict that has a 'template' key, return a
-    LangChain PromptTemplate with input variables inferred from braces.
-    E.g. if template = "Hello {name}!", PromptTemplate(input_variables=['name'], template=template).
+    LangChain PromptTemplate with input variables inserted into the '{}' braces 
+    present in the template key.
+
+    E.g. 
+    if name=John & template = "Hello {name}!" ---> PromptTemplate="Hello John!"
+
+    See "test/prompt_format_test.py" for example output
+
     """
     if "template" not in yaml_dict:
         raise KeyError("This YAML does not have a 'template' key")
@@ -58,8 +64,8 @@ def build_prompt_template_from_yaml(yaml_dict: Dict[str, Any]) -> PromptTemplate
 
     # Find all variables in {curly_braces}. A simple heuristic:
     vars = []
-    # Very naive: look for {...} patterns. If you already know your placeholders,
-    # you can hardcode them (like ['context'] or ['context','n_questions']).
+
+    # Very naive: look for {...} patterns.
     for piece in template_str.split("{"):
         if "}" in piece:
             var = piece.split("}")[0].strip()
