@@ -538,12 +538,9 @@ def chunk_and_embed_task(
 
         # 6) Bulk insert into Supabase
         logger.debug("Attempting Supabase bulk vector insert into public.document_vector_store.")
-        response = (
-            supabase_client
-            .table("document_vector_store")
-            .insert(vector_rows)
-            .execute()
-        )
+        response = supabase_client.table("document_vector_store") \
+                            .insert(vector_rows) \
+                            .execute()
         
         # Update status to COMPLETE after successful vector insert
         update_db_poll_status("COMPLETE", source_id, len(response.data or []))
