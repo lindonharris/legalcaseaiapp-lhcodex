@@ -7,7 +7,7 @@ psutil
 # Document parsing dependencies
 textract==1.6.5
 tenacity
-python-docx
+python-docx==1.1.2
 pypdf
 PyPDF2
 ebooklib
@@ -41,4 +41,3 @@ langchain
 langchain-community
 langchain-openai
 promptic
-

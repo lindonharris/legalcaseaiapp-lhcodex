@@ -8,10 +8,12 @@ from typing import List
 from langchain.schema import Document
 from .base import BaseDocumentLoader
 
-try:
-    import docx  # python-docx
-except ImportError:
-    raise ImportError("Please install python-docx: pip install python-docx")
+import docx
+
+# try:
+#     import docx  # python-docx
+# except ImportError:
+#     raise ImportError("Please install python-docx: pip install python-docx")
 
 class DocxLoader(BaseDocumentLoader):
     def load_documents(self, path: str) -> List[Document]:
