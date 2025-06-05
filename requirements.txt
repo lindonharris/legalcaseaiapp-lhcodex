@@ -10,6 +10,8 @@ tenacity
 python-docx
 pypdf
 PyPDF2
+ebooklib
+beautifulsoup4
 # PyPDF2==3.0.1
 
 # AI dependencies
