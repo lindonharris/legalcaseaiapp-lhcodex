@@ -5,9 +5,9 @@ loguru
 psutil
 
 # Document parsing dependencies
-textract==1.6.5
+textract
 tenacity
-python-docx==1.1.2
+python-docx
 pypdf
 PyPDF2
 ebooklib
