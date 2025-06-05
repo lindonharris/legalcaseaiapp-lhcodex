@@ -4,6 +4,9 @@ llm:                  # these are a fallback if the user does not specify a prov
   provider: openai    # "openai", "anthropic"... 
   model: gpt-4o-mini
 
+base_prompt: |
+  Create a comprehensive outline of the following documents.
+
 template: |
   You are a law professor writing sample exam questions. Based on the
   documents in this context window (from a RAG pipeline) create a comprehensive 

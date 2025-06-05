@@ -115,19 +115,14 @@ def rag_note_task(
 
         # Step 1) Choose the prompt based on user selection of "note_type"
         if note_type == "outline":
-            # query = "Create a comprehensive outline of the following documents"
             yaml_file = "case-outline-prompt.yaml"
         elif note_type == "exam_questions":
-            # query = "Based on the documents (appended as rag context) create an list of 15 exam questions"
             yaml_file = "exam-questions-prompt.yaml"
         elif note_type == "case_brief":
-            # query = "Based on the documents create a comprehensive case brief"
             yaml_file = "case-brief-prompt.yaml"
         elif note_type == "compare_contrast":
-            # query = "Based on the documents create a compare and contrast of the cases"
             yaml_file = "compare-contrast-prompt.yaml"
         elif note_type == "flashcards":
-            # query = "Based on the documents (appended as rag context) create an list of 15 flashcards covering core concepts"
             yaml_file = "flashcards-prompt.yaml"
         else:
             raise ValueError(f"Unknown note_type: {note_type}")
