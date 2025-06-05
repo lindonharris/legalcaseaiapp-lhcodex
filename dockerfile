@@ -23,7 +23,7 @@ COPY requirements.txt /app/requirements.txt
 WORKDIR /app
 
 # Downgrade pip to <24.1 so that it doesn’t reject textract’s metadata
-RUN pip install pip==24.0.1 \
+RUN pip install pip==24.0 \
     && pip install -r requirements.txt
 
 # 5) Copy in your application code
