@@ -542,12 +542,11 @@ def chunk_and_embed_task(
             supabase_client
             .table("document_vector_store")
             .insert(vector_rows)
-            .select("*")      # <— tell Supabase to return all columns, avoids blank `columns=`
             .execute()
         )
         
         # Update status to COMPLETE after successful vector insert
-        update_db_poll_status("COMPLETE", source_id)
+        update_db_poll_status("COMPLETE", source_id, len(response.data or []))
         logger.info(f"Bulk inserted {len(vector_rows)} embeddings into public.document_vector_store for source_id={source_id}")
 
     except Exception as e:
