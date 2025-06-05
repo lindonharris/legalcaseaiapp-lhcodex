@@ -1,8 +1,8 @@
 # utils/document_loaders/epub_loader.py
 
 from typing import List
-from ebooklib import epub  # pip install ebooklib
-from bs4 import BeautifulSoup  # pip install beautifulsoup4
+from ebooklib import epub, ITEM_DOCUMENT # Import ITEM_DOCUMENT directly
+from bs4 import BeautifulSoup
 from langchain.schema import Document
 from .base import BaseDocumentLoader
 
@@ -14,15 +14,19 @@ class EpubLoader(BaseDocumentLoader):
         """
         book = epub.read_epub(path)
         documents = []
-        for item in book.get_items():
-            if item.get_type() == epub.ITEM_DOCUMENT:
-                # item.get_content() is HTML bytes
-                soup = BeautifulSoup(item.get_content(), "html.parser")
-                text = "\n".join(p.get_text() for p in soup.find_all("p") if p.get_text().strip())
-                if not text.strip():
-                    continue
-                # You could use item.get_id() or item.get_name() as “metadata” for ordering
-                documents.append(
-                    Document(page_content=text, metadata={"source": path, "chapter": item.get_name()})
-                )
+        for item in book.get_items_of_type(ITEM_DOCUMENT): # More efficient iteration
+            # item.get_content() is HTML bytes
+            soup = BeautifulSoup(item.get_content(), "html.parser")
+            
+            # Find all <p> tags and extract their text
+            text = "\n".join(p.get_text() for p in soup.find_all("p") if p.get_text().strip())
+            
+            # Skip items that result in no text after extraction
+            if not text.strip():
+                continue
+            
+            # You could use item.get_id() or item.get_name() as “metadata” for ordering
+            documents.append(
+                Document(page_content=text, metadata={"source": path, "chapter": item.get_name()})
+            )
         return documents
