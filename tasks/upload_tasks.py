@@ -45,7 +45,11 @@ except KeyError:
 logger = logging.getLogger(__name__)
 
 # === PRODUCTION CELERY TASKS === #
-def update_db_poll_status(status: str, source_id: str, error_message: str = None):
+def update_db_poll_status(
+        status: str, 
+        source_id: str, 
+        error_message: str = None
+):
     """Helper function to update the status in document_sources."""
     try:
         payload = {"vector_embed_status": status}
@@ -357,9 +361,9 @@ def process_document_task(self, files, metadata=None):
             metadata["user_id"],
             source_ids,
             metadata["project_id"],
-            metadata.get("note_type", "None"),          # default to "None" if missing
+            metadata.get("note_type", "None"),          # fallback to "None" if missing
             metadata.get("provider", "openai"),
-            metadata.get("model_name", "gpt-4o-mini"),   # default to gpt-4o-mini  
+            metadata.get("model_name", "gpt-4o-mini"),   # fallback to gpt-4o-mini  
             metadata.get("temperature", "0.7"),
             metadata.get("addtl_params", {}),
         )
@@ -543,7 +547,11 @@ def chunk_and_embed_task(
                             .execute()
         
         # Update status to COMPLETE after successful vector insert
-        update_db_poll_status("COMPLETE", source_id, len(response.data or []))
+        update_db_poll_status(
+            "COMPLETE", 
+            source_id,
+            # Do not pass an error
+            )
         logger.info(f"Bulk inserted {len(vector_rows)} embeddings into public.document_vector_store for source_id={source_id}")
 
     except Exception as e:
