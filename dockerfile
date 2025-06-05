@@ -21,7 +21,10 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 # 4) Copy your requirements.txt and install Python packages
 COPY requirements.txt /app/requirements.txt
 WORKDIR /app
-RUN pip install --upgrade pip && pip install -r requirements.txt
+
+# Downgrade pip to <24.1 so that it doesn’t reject textract’s metadata
+RUN pip install pip==24.0.1 \
+    && pip install -r requirements.txt
 
 # 5) Copy in your application code
 COPY . /app
