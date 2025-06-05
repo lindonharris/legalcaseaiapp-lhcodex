@@ -8,6 +8,7 @@ FROM python:3.11-slim
 # 2) Install LibreOffice (and any other system dependencies) in one layer
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
+        antiword \
         libreoffice-core \
         libreoffice-common \
         libreoffice-writer && \
