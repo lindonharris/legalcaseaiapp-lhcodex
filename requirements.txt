@@ -7,9 +7,9 @@ psutil
 # Document parsing dependencies
 textract==1.6.5
 tenacity
+python-docx
 pypdf
 PyPDF2
-python-docx
 # PyPDF2==3.0.1
 
 # AI dependencies
