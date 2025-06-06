@@ -13,9 +13,7 @@ RUN apt-get update && \
         libreoffice-core \
         libreoffice-common \
         libreoffice-writer \
-        tesseract-ocr \
-        tesseract-ocr-spa \
-        tesseract-ocr-fra \
+        tesseract-ocr && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
