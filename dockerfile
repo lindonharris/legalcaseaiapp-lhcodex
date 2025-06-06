@@ -12,7 +12,7 @@ RUN apt-get update && \
         catdoc \
         libreoffice-core \
         libreoffice-common \
-        libreoffice-writer && \
+        libreoffice-writer \
         tesseract-ocr \
         tesseract-ocr-spa \
         tesseract-ocr-fra \
