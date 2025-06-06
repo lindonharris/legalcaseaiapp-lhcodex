@@ -11,7 +11,7 @@ python-docx
 pypdf
 pymupdf
 PyPDF2
-pytesseract 
+pytesseract
 pillow
 ebooklib
 beautifulsoup4
