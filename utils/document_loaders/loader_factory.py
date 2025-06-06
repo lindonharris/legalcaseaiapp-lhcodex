@@ -4,7 +4,7 @@ import os
 from typing import Type
 from .base import BaseDocumentLoader
 from .pdf_loader import PDFLoader
-# from .pdf_loader import PDFOCRLoader  # <- uncomment when ready
+from .pdf_ocr_loader import PDFOCRLoader
 from .docx_loader import DocxLoader
 from .epub_loader import EpubLoader
 
