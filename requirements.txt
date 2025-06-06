@@ -9,6 +9,7 @@ textract
 tenacity
 python-docx
 pypdf
+pymupdf
 PyPDF2
 ebooklib
 beautifulsoup4
