@@ -11,6 +11,8 @@ python-docx
 pypdf
 pymupdf
 PyPDF2
+pytesseract 
+pillow
 ebooklib
 beautifulsoup4
 # PyPDF2==3.0.1
