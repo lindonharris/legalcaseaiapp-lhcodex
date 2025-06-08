@@ -470,19 +470,22 @@ def chunk_and_embed_task(
         # Use suffix based on the URL’s extension so factory can pick loader
         # --- fix “.19437”‐style arXiv URLs by sniffing Content‐Type first ---
         VALID = {'.pdf', '.docx', '.doc', '.epub'}
-        # 1) Try the HTTP Content‐Type header
+
+        # 1) sniff Content-Type
         ctype = resp.headers.get('Content-Type', '').split(';')[0]
         suffix = mimetypes.guess_extension(ctype) or ''
-        # 2) If that wasn’t one of our known extensions, fall back to URL‐path
+
+        # 2) fall back to URL if header gave nothing useful
         if suffix not in VALID:
             ext = os.path.splitext(doc_url)[1].lower()
             if ext in VALID:
                 suffix = ext
             else:
-                raise ValueError(f"Cannot determine extension for {doc_url} (Content-Type={ctype})")
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+                # 3) default PDF instead of raising
+                suffix = '.pdf'
 
         # Write and save the downloaded temp file
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
         temp_file.write(resp.content)
         temp_file.close()
         local_path = temp_file.name
