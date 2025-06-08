@@ -130,6 +130,24 @@ class NewRagPipelineResponse(BaseModel):
     '''
     embedding_task_id: str      # from vector embedding task
 
+class RagPipelineNewDocumentsRequest(BaseModel):
+    ''' 
+    Pydantic struct for `POST/embed-new-docs/` to kick off of a new RAG embeddings
+    Files → S3/CF upload → Vector embedding
+    '''
+    files: List[str]  # List of URLs or file paths of the PDFs
+    metadata: Dict[str, Any]  # A dictionary for any metadata information
+
+class RagPipelineNewDocumentsResponse(BaseModel):
+    '''
+    Response for the `POST/???/` endpoint
+    Format (seen in PostMan):
+    {
+        "embedding_task_id": "some_task_id"
+    }
+    '''
+    embedding_task_id: str      # from vector embedding task
+
 # <---- Models for new RAG pipeline nested Celery task staus checking ----> #
 class EmbeddingStatusRequest(BaseModel):
     ''' Pydantic struct for `POST/embedding-pipeline-task-status` request checking on chunk & embed task for a new RAG project '''
@@ -248,41 +266,6 @@ async def sum_two_num(numbers: AdditionRequest):
     print(f"Task submitted: {task.id}")
     return {"task_id": task.id}
 
-# Endpoint for capturing PDF info (sanity check endpoint)
-@app.get("/pdf_capture", response_model=PDFCaptureResponse)
-async def pdf_capture(file: str):
-    unique_id = str(uuid.uuid4())  # Generate a unique UUID
-    return {"uuid": unique_id, "url": file}
-
-# Endpoint for extracting a single PDF's content
-@app.get("/pdf_extract", response_model=PDFExtractResponse)
-async def pdf_extract(file: str):
-    try:
-        # Extract text using the utility function
-        combined_text = extract_text_from_pdf(file)
-        return {"filename": file.split("/")[-1], "combined_text": combined_text}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-# Endpoint for extracting content from multiple PDFs
-@app.post("/pdf_extract_batch", response_model=PDFExtractBatchResponse)
-async def pdf_extract_batch(files: List[str]):
-    results = []
-    
-    for file_url in files:
-        try:
-            # Extract text using the utility function
-            combined_text = extract_text_from_pdf(file_url)
-            filename = file_url.split("/")[-1]
-            results.append(PDFExtractResponse(filename=filename, combined_text=combined_text))
-        
-        except Exception as e:
-            # Append an error message for the current file
-            results.append(PDFExtractResponse(filename=file_url, combined_text=f"Error: {str(e)}"))
-    
-    return {"results": results}
-
 # POST endpoint for addition using Celery
 @app.post("/celery_test_addition/")
 async def celery_test_addition(request: AdditionRequest):
@@ -295,7 +278,6 @@ async def celery_test_addition(request: AdditionRequest):
         return {"task_id": task.id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 # ================================================ #
 #                RAG CHAT ENDPOINTS
@@ -442,10 +424,9 @@ async def generate_ai_note(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/add-to-rag-project/", response_model=NewRagPipelineResponse)
-async def append_sources_to_project(request: NewRagPipelineRequest, background_tasks: BackgroundTasks):
+@app.post("/embed-new-docs/", response_model=RagPipelineNewDocumentsResponse)
+async def append_sources_to_project(request: RagPipelineNewDocumentsRequest, background_tasks: BackgroundTasks):
     '''
-    @TODO HAVE NOT STARTED !!!
     Endpoint to add new sources to an existing RAG pipeline for AI notes in one call:
         - process_pdf_task:
             input: request.files, request.metadata
@@ -455,39 +436,24 @@ async def append_sources_to_project(request: NewRagPipelineRequest, background_t
     project_id
         request.files (List): list of pdf file links
         request.metadata (json): {
-            project_id:
+            user_id: UUID
+            project_id: UUID
+            ... can't think of other necessary args
         }
     '''
+
     try:
-        # Create signatures for the tasks
-        process_pdf_task_signature = process_document_task.s(request.files, request.metadata)        # Upload PDFs to AWS S3, and Supabase
-        # validate_and_generate_audio_task_signature = validate_and_generate_audio_task.s(request.files, request.metadata)
-
-        # Create the group
-        task_group = group(
-            process_pdf_task_signature,
-            # validate_and_generate_audio_task_signature
+        # Apply async job to append new docs to an existing project (grounded w/ RAG)
+        job = process_document_task.apply_async(
+            args=[
+                request.files, 
+                request.metadata
+            ]
         )
+        return {"task_id": job.id}
 
-        # Create the chord with the group and callback
-        task_chord = chord(task_group)(insert_project_documents_task.s())
-
-        # The result of the chord is the AsyncResult of the callback task
-        chord_result = task_chord
-
-        # Get task IDs
-        process_pdf_task_id = chord_result.parent.results[0].id
-        # validate_and_generate_audio_task_id = chord_result.parent.results[1].id
-        insert_task_id = chord_result.id
-
-        # Return the task IDs to the client
-        return {
-            # "audio_task_id": validate_and_generate_audio_task_id,
-            "embedding_task_id": process_pdf_task_id,
-            "insert_task_id": insert_task_id,
-        }
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/rag-chat/original")
 async def rag_chat_original(request: RagQueryRequest):

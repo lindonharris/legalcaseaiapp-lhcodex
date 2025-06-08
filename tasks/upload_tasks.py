@@ -79,7 +79,7 @@ def update_db_poll_status(
 def process_document_task(self, files, metadata=None):
     """
     Main Celery task to:
-        1) upload PDFs to S3, 
+        1) upload docs (.pdf, docx, doc, epub, md, txt) to S3, 
         2) save to Supabase, 
         3) and trigger vector embedding tasks.
     Includes enhanced status tracking.
