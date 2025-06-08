@@ -433,6 +433,352 @@ def process_document_task(self, files, metadata=None):
             ) from e
 
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
+def append_document_task(self, files, metadata=None):
+    """
+    Main Celery task to:
+        1) upload docs (.pdf, docx, doc, epub, md, txt) to S3, 
+        2) save to Supabase, 
+        3) and trigger vector embedding tasks.
+    Includes enhanced status tracking.
+
+    Args:
+        files (List): Containing file CDN urls (created by WeWeb's document upload element)
+        metadata (json): {
+            'user_id': UUID,
+            'project_id': UUID,
+            ... no other vars
+    Return:
+        ???
+    """
+    try:
+        # Initialize task-level state that will be accessible via results = AsyncResult(task_id)
+        # result.state → "PENDING"
+        # result.info → {"start_time": "..."}
+        task_start_time = datetime.now(timezone.utc).isoformat()
+        self.update_state(
+            state='PROCESSING',
+            meta={
+                'start_time': task_start_time,
+                'total_files': len(files),
+                'processed_files': 0,
+                'stage': 'INITIALIZING',
+                'message': 'Starting document processing workflow'
+            }
+        )
+
+        # === RENDER RESOURCE LOGGING (MB) === #
+        process = psutil.Process(os.getpid())
+        mem_before = process.memory_info().rss
+        logger.info(f"Starting {self.name} with {len(files)} files and metadata: {metadata}")
+        logger.info(f"Memory usage before task: {mem_before / (1024 * 1024)} MB")
+
+        if not files:
+            logger.warning("No files provided for processing.")
+            raise ValueError("Please upload at least one PDF file before processing.")
+        
+        rows_to_insert = []
+        temp_paths = []  # keep track of temps for cleanup
+        successful_files = 0
+        failed_files = 0
+
+        # === 1) Download from WeWeb CDN & upload each file to AWS S3===
+        self.update_state(
+            state='PROCESSING',
+            meta={
+                'start_time': task_start_time,
+                'stage': 'DOWNLOADING_AND_UPLOADING',
+                'message': f'Downloading and uploading {len(files)} files to S3',
+                'processed_files': 0,
+                'total_files': len(files)
+            }
+        )
+
+        for idx, file_url  in enumerate(files):
+            try:
+                # download or read locally
+                if file_url .lower().startswith(("http://", "https://")):
+                    self.update_state(
+                        state='PROCESSING',
+                        meta={
+                            'stage': 'DOWNLOADING',
+                            'current_file': file_url .split('/')[-1],
+                            'current_file_index': idx + 1,
+                            'total_files': len(files),
+                            'message': f'Downloading file {idx + 1}/{len(files)}'
+                        }
+                    )
+
+                    # GET/ Request and server "spoofing"
+                    # resp = requests.get( file_url )
+                    # resp.raise_for_status()
+                    try:
+                        headers = {
+                            "User-Agent": (
+                                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                "Chrome/114.0.0.0 Safari/537.36"
+                            )
+                        }
+                        resp = requests.get(file_url, headers=headers, timeout=30)
+                        resp.raise_for_status()
+                    except requests.exceptions.HTTPError as he:
+                        status = he.response.status_code if he.response is not None else "N/A"
+                        err_msg = f"{status} error downloading {file_url}"
+                        logger.error(f"[file loop] Failed downloading '{file_url}': {err_msg}")
+                        update_db_poll_status("FAILED", error_message=err_msg)
+                        failed_files += 1
+                        continue
+                    except Exception as e:
+                        err_msg = f"Download exception for {file_url}: {e}"
+                        logger.error(f"[file loop] {err_msg}", exc_info=True)
+                        update_db_poll_status("FAILED", error_message=err_msg)
+                        failed_files += 1
+                        continue
+
+                    ext = os.path.splitext(file_url)[1].lower()     # <-- persisted in DB & used in loader_factory
+                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ext) 
+                    tmp.write(resp.content)
+                    tmp.close()
+                    file_path = tmp.name
+                else:
+                    file_path = file_url 
+
+                # upload to S3
+                self.update_state(
+                    state='PROCESSING',
+                    meta={
+                        'start_time': task_start_time,
+                        'stage': 'UPLOADING_TO_S3',
+                        'current_file': file_url.split('/')[-1],
+                        'current_file_index': idx + 1,
+                        'total_files': len(files),
+                        'message': f'Uploading file {idx + 1}/{len(files)} to S3'
+                    }
+                )
+                ext = os.path.splitext(file_path)[1]
+                key = f"{uuid.uuid4()}{ext}"
+                upload_to_s3(s3_client, file_path, key)
+
+                # get CloudFront URL
+                url = get_cloudfront_url(key)
+
+                # Define rows to insert into document_sources table
+                rows_to_insert.append({
+                    "cdn_url": url,
+                    "project_id": str(metadata["project_id"]),
+                    "content_tags": ["Fitness", "Health", "Wearables"],
+                    "uploaded_by": str(metadata["user_id"]), 
+                    "vector_embed_status": "INITIALIZING",  # New initial status
+                    "filename": file_url.split('/')[-1],  # Store original filename
+                    "file_size_bytes": os.path.getsize(file_path),  # Store file size for reference
+                    "file_extension": ext,
+                    "created_at": datetime.now(timezone.utc).isoformat()
+                })
+                temp_paths.append(file_path)
+                successful_files += 1
+
+                logger.info(f"Prepared upload row for {file_path} → {url}")
+
+            except Exception as e:
+                failed_files += 1
+                logger.error(f"[file loop] Failed processing '{file_url}': {e}", exc_info=True)
+                # Update the task state with error information
+                self.update_state(
+                    state='PROCESSING',
+                    meta={
+                        'start_time': task_start_time,
+                        'stage': 'FILE_PROCESSING_ERROR',
+                        'current_file': file_url.split('/')[-1] if '/' in file_url else file_url,
+                        'error_message': str(e),
+                        'successful_files': successful_files,
+                        'failed_files': failed_files,
+                        'message': f'Error processing file {idx + 1}/{len(files)}: {str(e)[:100]}...'
+                    }
+                )
+                # skip this file and continue
+                continue
+
+        if not rows_to_insert:
+            logger.error("No successful uploads; aborting task.")
+            raise RuntimeError("All file uploads failed.")
+
+        # === 2) Bulk insert into Supabase ===
+        self.update_state(
+            state='PROCESSING',
+            meta={
+                'start_time': task_start_time,
+                'stage': 'DATABASE_INSERTION',
+                'message': f'Inserting {len(rows_to_insert)} document records into database',
+                'successful_files': successful_files,
+                'failed_files': failed_files
+            }
+        )
+        
+        source_ids = []  # Initialize source_ids list
+        try:
+            # First, insert with INITIALIZING status
+            response = supabase_client.table("document_sources") \
+                                .insert(rows_to_insert) \
+                                .execute()
+            
+            # Extract source_ids from the insert response
+            source_ids = [r["id"] for r in response.data]
+            
+            # Update status to PENDING for embedding
+            self.update_state(
+                state='PROCESSING',
+                meta={
+                    'start_time': task_start_time,
+                    'stage': 'UPDATING_STATUS',
+                    'message': f'Setting {len(source_ids)} documents to PENDING status',
+                    'successful_files': successful_files,
+                    'failed_files': failed_files,
+                    'source_ids': source_ids  # Include source_ids in state for reference
+                }
+            )
+            
+            # Update all document statuses to PENDING
+            update_payload = [{"id": sid, "vector_embed_status": "PENDING"} for sid in source_ids]
+            update_resp = supabase_client.table("document_sources") \
+                                .upsert(update_payload) \
+                                .execute()
+
+        except Exception as e:
+            logger.error(f"[Supabase] Bulk insert failed: {e}", exc_info=True)
+            # Cleanup temp files before re-raising the exception for Celery retry
+            for p in temp_paths:
+                try: 
+                    os.unlink(p)
+                    logger.debug(f"Deleted temp file {p} after Supabase insert failure.")
+                except: 
+                    logger.warning(f"[CELERY] Could not delete temp file {p} during Supabase failure cleanup.", exc_info=True)
+            
+            # Update task state
+            self.update_state(
+                state='FAILURE',
+                meta={
+                    'exc_type':     type(e).__name__,
+                    'exc_module':   e.__class__.__module__,
+                    'exc_message':  str(e),
+                    'error': f"Initial DB insert failed: {str(e)}",
+                    'stage': 'DATABASE_ERROR',
+                    'message': f'Database insertion failed: {str(e)[:100]}...'
+                }
+            )
+            raise
+
+        # === 3) Cleanup temp files ===
+        self.update_state(
+            state='PROCESSING',
+            meta={
+                'stage': 'CLEANUP',
+                'message': 'Cleaning up temporary files',
+                'successful_files': successful_files,
+                'failed_files': failed_files,
+                'source_ids': source_ids
+            }
+        )
+        
+        for path in temp_paths:
+            try:
+                os.unlink(path)
+                logger.debug(f"Deleted temp file {path}")
+            except Exception:
+                logger.warning(f"[CELERY] Could not delete temp file {path}", exc_info=True)
+
+        # === 4) Kick off embedding tasks (no final callback) ===
+        self.update_state(
+            state='PROCESSING',
+            meta={
+                'stage': 'INITIATING_EMBEDDING',
+                'message': f'Starting embedding tasks for {len(source_ids)} documents',
+                'successful_files': successful_files,
+                'failed_files': failed_files,
+                'source_ids': source_ids
+            }
+        )
+
+        logger.info(f"{self.name} prepared {len(source_ids)} source_ids, launching embedding chord")
+
+        # Create a list of task signatures for our embedding “group”
+        embedding_tasks = [
+            chunk_and_embed_task.s(
+                row["cdn_url"],                 # Pass the CDN URL
+                sid,                            # Pass the source_id from the DB insert into public.document_sources
+                metadata["project_id"]          # Pass the project_id
+            )
+            for sid, row in zip(source_ids, rows_to_insert)
+        ]
+
+        from celery import group
+
+        # fire off all embedding tasks as a group
+        embedding_job = group(embedding_tasks).apply_async()
+        embedding_group_id = embedding_job.id
+        logger.info(f"Embedding tasks launched as group {embedding_group_id}")
+
+        # Update final state with success; embeddings are in progress
+        self.update_state(
+            state='SUCCESS',
+            meta={
+                'stage': 'COMPLETED',
+                'message': 'Document upload complete, embedding in progress...',
+                'successful_files': successful_files,
+                'failed_files': failed_files,
+                'source_ids': source_ids
+            }
+        )
+
+        # Return the group ID so you can track embedding progress via polling:
+        return {
+            "source_ids":      source_ids,
+            "successful":      successful_files,
+            "failed":          failed_files,
+            "total":           len(files),
+            "workflow_task_id": embedding_group_id
+        }
+    
+    except Exception as e:
+        # this catches anything that bubbled out of your inner logic
+        logger.error(f"Overall process_document_task failed: {e}", exc_info=True)
+
+        try:
+            # Update state before retry
+            self.update_state(
+                state='RETRY',
+                meta={
+                    'error': str(e),
+                    'retry_count': self.request.retries,
+                    'max_retries': self.max_retries,
+                    'message': f'Task failed, attempting retry {self.request.retries + 1}/{self.max_retries + 1}'
+                }
+            )
+            # schedule a retry if we haven't hit max_retries yet
+            raise self.retry(exc=e)
+        except MaxRetriesExceededError:
+            # once retries are exhausted, raise a clear runtime error
+            logger.critical(
+                f"[CELERY] process_document_task failed permanently after {self.max_retries} retries: {e}"
+            )
+            # Update final failure state 
+            self.update_state(
+                state='FAILURE',
+                meta={
+                    'exc_type':     type(e).__name__,
+                    'exc_module':   e.__class__.__module__,
+                    'exc_message':  str(e),
+                    'error': str(e),
+                    'retry_count': self.max_retries,
+                    'max_retries': self.max_retries,
+                    'message': f'Task failed after {self.max_retries} retries'
+                }
+            )
+            raise RuntimeError(
+                f"[CELERY] process_document_task failed permanently after {self.max_retries} retries: {e}"
+            ) from e
+
+
+@celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
 def chunk_and_embed_task(
     self, 
     doc_url, 

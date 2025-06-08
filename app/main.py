@@ -21,7 +21,7 @@ from utils.pdf_utils import extract_text_from_pdf
 from celery import chain, chord, group, states
 from celery.result import AsyncResult
 from tasks.podcast_generate_tasks import validate_and_generate_audio_task, generate_dialogue_only_task
-from tasks.upload_tasks import process_document_task
+from tasks.upload_tasks import process_document_task, append_document_task
 from tasks.test_tasks import addition_task
 from tasks.chat_streaming_tasks import rag_chat_streaming_task
 from tasks.chat_tasks import rag_chat_task, persist_user_query
@@ -446,7 +446,7 @@ async def append_sources_to_project(request: RagPipelineNewDocumentsRequest, bac
 
     try:
         # Apply async job to append new docs to an existing project (grounded w/ RAG)
-        job = process_document_task.apply_async(
+        job = append_document_task.apply_async(
             args=[
                 request.files, 
                 request.metadata
