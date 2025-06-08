@@ -17,7 +17,13 @@ if not DEEPSEEK_API_KEY or not DEEPSEEK_BASE_URL:
     raise ValueError("DeepSeek credentials or base URL not found in environment")
 
 class DeepSeekClient:
-    def __init__(self, model_name: str = "deepseek-v3", temperature: float = 0.7, streaming: bool = False, callback_manager=None):
+    def __init__(
+            self,
+            model_name: str = "deepseek-chat", # <- so it's deepseek-chat not deepseek-v3
+            temperature: float = 0.7, 
+            streaming: bool = False, 
+            callback_manager=None
+        ):
         # You can either (a) create a raw OpenAI client and call its chat endpoint directly, or
         # (b) wrap it with LangChain.
         llm_kwargs = {

@@ -1,0 +1,28 @@
+# prompts/case-brief-prompt.yaml
+
+llm:
+  provider: openai
+  model: gpt-4o-mini
+
+base_prompt: |
+  Generate a concise summary that focuses on comparing and contrasting the legal opinions expresses 
+  in the attached documents.
+
+template: |
+  You are a law clerk. Given the following context (relevant document passages below),
+  produce a “Compare Contrast" analysis with these headings, in Markdown:
+  
+  1. Case Name  
+  2. Opinion 1  
+  3. Opionion 2  
+  4. Common Ground  
+  5. Differences
+
+  Relevant Context (RAG Retrieval):
+  {context}
+
+  Write a concise, bullet-pointed case brief.
+
+output_format:
+  type: markdown
+  wrapper: "```"

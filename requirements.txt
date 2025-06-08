@@ -6,12 +6,12 @@ psutil
 
 # Document parsing dependencies
 textract
+pytesseract
 tenacity
 python-docx
 pypdf
 pymupdf
 PyPDF2
-pytesseract
 pillow
 ebooklib
 beautifulsoup4
