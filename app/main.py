@@ -289,6 +289,8 @@ async def create_new_rag_project(
 ):
     '''LIVE (06-03-2025)
     Endpoint to create a RAG pipeline for user project:
+        - (prior) WeWeb creates a new project
+        - (prior) WeWeb creates a new chat_session and fkeys it to the project
         - Uploads PDFs to AWS S3 and Supabase
         - Initiates chunking and embedding tasks
         - Returns task_id and source_ids for status monitoring
@@ -651,11 +653,7 @@ async def get_pdf_upload_status(task_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Status check error: {e}")
 
-@app.post(
-    "/embedding-pipeline-task-status",
-    response_model=EmbeddingStatusResponse,
-    summary="Check embedding status for a batch of documents"
-)
+@app.post("/embedding-pipeline-task-status", response_model=EmbeddingStatusResponse, summary="Check embedding status for a batch of documents")
 async def embedding_pipeline_task_status(
     req: EmbeddingStatusRequest
 ):

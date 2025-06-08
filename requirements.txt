@@ -15,6 +15,7 @@ PyPDF2
 pillow
 ebooklib
 beautifulsoup4
+mimetype
 # PyPDF2==3.0.1
 
 # AI dependencies

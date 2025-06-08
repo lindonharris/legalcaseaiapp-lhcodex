@@ -12,6 +12,7 @@ import psutil
 import requests
 import tempfile
 import tiktoken
+import mimetypes
 from typing import List
 from tasks.note_tasks import rag_note_task 
 from tasks.celery_app import celery_app  # Import the Celery app instance (see celery_app.py for LocalHost config)
@@ -465,9 +466,23 @@ def chunk_and_embed_task(
         # 1) Download the file
         resp = requests.get(doc_url)
         resp.raise_for_status()
+
         # Use suffix based on the URL’s extension so factory can pick loader
-        suffix = os.path.splitext(doc_url)[1].lower()
+        # --- fix “.19437”‐style arXiv URLs by sniffing Content‐Type first ---
+        VALID = {'.pdf', '.docx', '.doc', '.epub'}
+        # 1) Try the HTTP Content‐Type header
+        ctype = resp.headers.get('Content-Type', '').split(';')[0]
+        suffix = mimetypes.guess_extension(ctype) or ''
+        # 2) If that wasn’t one of our known extensions, fall back to URL‐path
+        if suffix not in VALID:
+            ext = os.path.splitext(doc_url)[1].lower()
+            if ext in VALID:
+                suffix = ext
+            else:
+                raise ValueError(f"Cannot determine extension for {doc_url} (Content-Type={ctype})")
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+
+        # Write and save the downloaded temp file
         temp_file.write(resp.content)
         temp_file.close()
         local_path = temp_file.name
