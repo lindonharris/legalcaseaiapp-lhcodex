@@ -140,7 +140,7 @@ class RagPipelineNewDocumentsRequest(BaseModel):
 
 class RagPipelineNewDocumentsResponse(BaseModel):
     '''
-    Response for the `POST/???/` endpoint
+    Response for the `POST/embed-new-docs/` endpoint
     Format (seen in PostMan):
     {
         "embedding_task_id": "some_task_id"
@@ -452,7 +452,7 @@ async def append_sources_to_project(request: RagPipelineNewDocumentsRequest, bac
                 request.metadata
             ]
         )
-        return {"task_id": job.id}
+        return {"embedding_task_id": job.id}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
