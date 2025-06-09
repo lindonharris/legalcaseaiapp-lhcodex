@@ -46,7 +46,7 @@ messages:
       - Always respond *only* with Markdown. Wrap final answers in triple backticks.
       - If citing cases, use official Bluebook citation format (e.g., “Brown v. Board of Education, 347 U.S. 483 (1954)”).
       - Do not reveal chain-of-thought; only surface the final structured answer.
-      - If the user asks for legal advice, include the following escape‐hatch.
+      - If the user asks for legal advice, include the following escape-hatch.
 
   # ────────────────────────────────────────────────────────────────
   # 4) Escape‐Hatch / Fallback

@@ -168,7 +168,9 @@ def rag_note_task(
         elif note_type == "outline":
             # Assuming your "case-outline-prompt.yaml" has only {context}
             llm_input = prompt_template.format(context=chunk_context)
-
+        
+        elif note_type == "compare_contrast":
+            llm_input = prompt_template.format(context=chunk_context)
         else:
             # (We already checked above, but safe‐guard here)
             raise ValueError(f"Unsupported note_type: {note_type}")
