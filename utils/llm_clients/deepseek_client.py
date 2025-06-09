@@ -18,24 +18,19 @@ if not DEEPSEEK_API_KEY or not DEEPSEEK_BASE_URL:
 
 class DeepSeekClient:
     def __init__(
-            self,
-            model_name: str = "deepseek-chat", # <- so it's deepseek-chat not deepseek-v3
-            temperature: float = 0.7, 
-            streaming: bool = False, 
-            callback_manager=None
-        ):
-        # You can either (a) create a raw OpenAI client and call its chat endpoint directly, or
-        # (b) wrap it with LangChain.
+        self,
+        model_name: str = "deepseek-chat",
+        temperature: float = 0.7,
+        streaming: bool = False,
+        callback_manager=None,
+    ):
         llm_kwargs = {
-            "api_key": DEEPSEEK_API_KEY,
-            "model": model_name,
+            "model_name": model_name,
+            "temperature": temperature,
             "streaming": streaming,
-            "base_url": DEEPSEEK_BASE_URL,
+            "openai_api_key": DEEPSEEK_API_KEY,
+            "openai_api_base": DEEPSEEK_BASE_URL,
         }
-        # … (optionally clamp temperature if model supports it) …
-        llm_kwargs["temperature"] = temperature
-
-        # Internally use LangChain’s ChatOpenAI but override client
         self._client = ChatOpenAI(**llm_kwargs)
 
     def chat(self, prompt: str) -> str:
