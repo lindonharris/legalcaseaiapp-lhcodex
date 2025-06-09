@@ -24,7 +24,8 @@ from dotenv import load_dotenv
 
 # langchain imports
 from langchain_core.load import dumpd
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+# from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain_community.embeddings import OpenAIEmbeddings
 from langchain.prompts import PromptTemplate
 from langchain.schema import AIMessage
 from langchain.callbacks.base import BaseCallbackHandler

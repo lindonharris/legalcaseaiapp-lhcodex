@@ -288,7 +288,8 @@ def rag_chat_task(
 
         # Step 1) Embed the query
         # from langchain_openai import OpenAIEmbeddings       # Lazy-import heavy modules
-        from langchain.embeddings.openai import OpenAIEmbeddings    # Lazy-import heavy modules
+        # from langchain.embeddings.openai import OpenAIEmbeddings    # Lazy-import heavy modules
+        from langchain_community.embeddings import OpenAIEmbeddings
         embedding_model = OpenAIEmbeddings(
             model="text-embedding-ada-002",
             api_key=OPENAI_API_KEY,
