@@ -24,6 +24,10 @@ class DeepSeekClient:
         streaming: bool = False,
         callback_manager=None,
     ):
+        
+        # make model_name available on the client
+        self.model_name = model_name
+        
         llm_kwargs = {
             "model_name": model_name,
             "temperature": temperature,
