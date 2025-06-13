@@ -113,6 +113,7 @@ def insert_note_supabase_record(
     project_id, 
     content_markdown, 
     note_type, 
+    is_generated,
     is_shareable, 
     created_at,
 ):
@@ -124,6 +125,7 @@ def insert_note_supabase_record(
             "note_type": note_type,
             "content_markdown": content_markdown,
             "created_at": created_at,
+            "is_generated": is_generated,
             "is_shareable": is_shareable
         }).execute()
     except Exception as e:
