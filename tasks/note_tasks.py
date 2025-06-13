@@ -289,6 +289,7 @@ def save_note(
         project_id=project_id,
         content_markdown=content,
         note_type=note_type,
+        is_generated=True,
         is_shareable=False,
         created_at=datetime.now(timezone.utc).isoformat()
     )
