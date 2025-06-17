@@ -192,6 +192,7 @@ def rag_note_task(
         save_note(
             project_id,
             user_id, 
+            note_title,
             note_type, 
             content=full_answer      # full rag reponse
         )
