@@ -301,6 +301,7 @@ async def create_new_rag_project(
             user_id: UUID
             project_id: UUID
             model_name: string (optional) 
+            note_title: string (which is the notes title)
             note_type: string
             ...
             addtl_params: dict
@@ -330,7 +331,10 @@ async def create_new_rag_project(
         #     args=[request.files, request.metadata]
         # )
         job = process_document_task.apply_async(
-            args=[request.files, request.metadata]
+            args=[
+                request.files, 
+                request.metadata
+            ]
         )
         
         # The task will return source_ids when it completes initial DB insertion
@@ -344,49 +348,6 @@ async def create_new_rag_project(
     except Exception as e:
         logger.error(f"Error creating new RAG project: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error creating RAG project: {str(e)}")
-    
-# @app.post("/new-rag-and-notes/", response_model=NewRagAndNoteResponse)
-# async def create_new_rag_project_and_gen_notes(
-#     request: NewRagPipelineRequest, 
-#     background_tasks: BackgroundTasks
-# ):
-#     '''UNUSED...
-#     Endpoint to create BOTH a RAG pipeline and a "quick action" AI note, chaining 2 celery notes together
-#         - process_pdf_task():
-#             input: request.files, request.metadata
-#             returns: None
-
-#         - rag_note_task():
-#             input: request.metadata
-#             returns: None
-        
-#     Request contains:
-#         request.files (List): list of pdf file links
-#         request.metadata (json): {
-#             project_id:
-#             provider:
-#             model_name:
-#             temperature:
-#         }
-#     '''
-#     try:
-#         # 1) Kick off a chain: upload → note
-#         workflow = chain(
-#             process_pdf_task.s(request.files, request.metadata),
-#             rag_note_task.s(
-#                 request.metadata["user_id"],            # ← 
-#                 request.metadata["chat_session_id"],    # ← 
-#                 request.metadata["note_type"],          # ← maps to note_type (e.g. "create an pros/cons outline of this case…")
-#                 request.metadata["project_id"],         # ← 
-#                 request.metadata["model_name"],          # ←
-#                 request.metadata["addtl_params"],
-#             )
-#         )
-#         result: AsyncResult = workflow.apply_async()
-#         return {"workflow_id": result.id}
-
-#     except Exception as e:
-#         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/generate-ai-note/", response_model=GenericTaskResponse)
 async def generate_ai_note(
@@ -415,6 +376,7 @@ async def generate_ai_note(
                 "user_id":       request.metadata["user_id"],       # ← maps to your user_id param
                 "note_type":     request.metadata["note_type"],     # ← maps to your note_type param
                 "project_id":    request.metadata["project_id"],    # ← maps to your project_id param  
+                "note_title":    request.metadata["note_title"],         # ← "project_name: question type"
                 "provider":      request.metadata["provider"],
                 "model_name":    request.metadata["model_name"],    # ← maps to your model_name param
                 "temperature":   request.metadata["temperature"],

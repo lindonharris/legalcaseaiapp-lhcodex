@@ -362,6 +362,7 @@ def process_document_task(self, files, metadata=None):
             metadata["user_id"],
             source_ids,
             metadata["project_id"],
+            metadata.get("note_title", ""),                  # note title 
             metadata.get("note_type", "None"),          # fallback to "None" if missing
             metadata.get("provider", "openai"),
             metadata.get("model_name", "gpt-4o-mini"),   # fallback to gpt-4o-mini  
@@ -944,6 +945,7 @@ def finalize_document_processing_workflow(
     user_id: str, 
     source_ids: List[str],
     project_id: str,
+    note_title: str,
     note_type: str,
     provider: str,
     model_name: str,
@@ -1014,6 +1016,7 @@ def finalize_document_processing_workflow(
                     user_id,
                     note_type,
                     project_id,
+                    note_title,
                     provider,
                     model_name,
                     temperature,

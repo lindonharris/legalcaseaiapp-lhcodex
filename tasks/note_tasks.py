@@ -82,7 +82,8 @@ def rag_note_task(
     self, 
     user_id, 
     note_type, 
-    project_id, 
+    project_id,
+    note_title, 
     provider: str,  # ← “openai”, “anthropic”, etc.
     model_name: str,
     temperature: float = 0.7,
@@ -231,52 +232,53 @@ def fetch_relevant_chunks(query_embedding, project_id, match_count=10):
         raise
 
 
-def generate_rag_answer(
-        llm_client,
-        query, 
-        relevant_chunks: list,
-        max_chat_history: int = 10,
-    ):
-    """
-    [NOTE_TASK SPECIFIC[]
-    Build prompt, invoke streaming LLM, publish tokens in real-time,
-    and return the full generated answer at completion.
+# def generate_rag_answer(
+#         llm_client,
+#         query, 
+#         relevant_chunks: list,
+#         max_chat_history: int = 10,
+#     ):
+#     """
+#     [Replaced by llm_client.chat(llm_input)]
+#     Build prompt, invoke streaming LLM, publish tokens in real-time,
+#     and return the full generated answer at completion.
 
-    Q: **Why no `chat_session_id` ?
-    A: because this is going to a project not a chat histoty
-    """
-    # Build conversational context
-    # chat_history = fetch_chat_history(chat_session_id)[-max_chat_history:]
-    # formatted_history = format_chat_history(chat_history) if chat_history else ""
-    chunk_context = "\n\n".join(c["content"] for c in relevant_chunks)
-    full_context = (
-        f"Relevant Context:\n{chunk_context}\n\n"
-        f"User Query: {query}\nAssistant:"
-    )
+#     Q: **Why no `chat_session_id` ?
+#     A: because this is going to a project not a chat histoty
+#     """
+#     # Build conversational context
+#     # chat_history = fetch_chat_history(chat_session_id)[-max_chat_history:]
+#     # formatted_history = format_chat_history(chat_history) if chat_history else ""
+#     chunk_context = "\n\n".join(c["content"] for c in relevant_chunks)
+#     full_context = (
+#         f"Relevant Context:\n{chunk_context}\n\n"
+#         f"User Query: {query}\nAssistant:"
+#     )
 
-    trimmed_context = trim_context_length(
-        full_context=full_context,
-        query=query,
-        relevant_chunks=relevant_chunks,
-        model_name=llm_client.model_name,
-        max_tokens=127999
-    )
+#     trimmed_context = trim_context_length(
+#         full_context=full_context,
+#         query=query,
+#         relevant_chunks=relevant_chunks,
+#         model_name=llm_client.model_name,
+#         max_tokens=127999
+#     )
 
-    # 5) Finally, call the LLM client once
-    try:
-        # All of your LLMClient implementations expose `.chat(prompt: str) -> str`
-        answer = llm_client.chat(trimmed_context)
-        # llm_client = get_chat_llm(model_name) # being SUNSET !!! 
-        return answer
-    except Exception as e:
-        logger.error(f"Error in LLM call (model={llm_client.model_name}): {e}", exc_info=True)
-        raise
+#     # 5) Finally, call the LLM client once
+#     try:
+#         # All of your LLMClient implementations expose `.chat(prompt: str) -> str`
+#         answer = llm_client.chat(trimmed_context)
+#         # llm_client = get_chat_llm(model_name) # being SUNSET !!! 
+#         return answer
+#     except Exception as e:
+#         logger.error(f"Error in LLM call (model={llm_client.model_name}): {e}", exc_info=True)
+#         raise
 
 
 def save_note(
         project_id, 
         user_id, 
         note_type, 
+        note_title,
         content
     ):
     """
@@ -287,6 +289,7 @@ def save_note(
         table_name="notes",
         user_id=user_id,
         project_id=project_id,
+        note_title=note_title,
         content_markdown=content,
         note_type=note_type,
         is_generated=True,
