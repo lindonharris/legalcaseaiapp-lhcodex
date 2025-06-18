@@ -20,3 +20,9 @@ This repository welcomes contributions from automated agents. To keep the histor
 - Follow PEP8 style conventions and format code with `black` (line length 88) if available.
 
 By committing to this repository you agree to follow these instructions so that all changes remain transparent and traceable.
+
+## Manual Tasks Log
+ - When a change requires human intervention (environment setup, migrations, etc.) add an entry to `dev guides/manual_tasks.csv`.
+ - The CSV columns are `ticket`, `title`, `description`, `affected_files`, and `timestamp`.
+ - Tickets must be sequential (`MT-001`, `MT-002`, and so on).
+ - Delete a row once the manual task has been completed.
