@@ -1,2 +1,3 @@
 Ticket,Date,Time,Author,Description,Files Affected,Notes
 CL-001,2025-06-17,22:00,LinDon Harris,"Initial clone of LegalCaseAIApp by Dominic Dawes to create new repository legalcaseaiapp-lhcodex.","All files","Source repo was LegalCaseAIApp (Dominic Dawes)."
+CL-002,2025-06-18,02:58,LinDon Harris,"Add product spec doc","dev guides/product_spec.md",""
