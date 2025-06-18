@@ -3,3 +3,5 @@ CL-001,2025-06-17,22:00,LinDon Harris,"Initial clone of LegalCaseAIApp by Domini
 CL-002,2025-06-18,02:58,LinDon Harris,"Add product spec doc","dev guides/product_spec.md",""
 CL-003,2025-06-18,03:08,LinDon Harris,"Add AGENTS file with commit guidelines","AGENTS.md",""
 CL-004,2025-06-18,03:16,LinDon Harris,"Clarify changelog instructions link in AGENTS","AGENTS.md",""
+CL-005,2025-06-18,03:32,LinDon Harris,"Add manual tasks log instructions","AGENTS.md;dev guides/manual_tasks.csv",""
+CL-006,2025-06-18,03:40,LinDon Harris,"Add ticket field to manual tasks log and record first manual task","AGENTS.md;dev guides/manual_tasks.csv",""
