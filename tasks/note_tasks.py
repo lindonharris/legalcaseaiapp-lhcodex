@@ -190,10 +190,10 @@ def rag_note_task(
 
         # Step 7) Save note to the public.notes table in Supabase (realtime Supabase table)
         save_note(
-            project_id,
-            user_id, 
-            note_title,
-            note_type, 
+            project_id=project_id,
+            user_id=user_id, 
+            note_title=note_title,
+            note_type=note_type, 
             content=full_answer      # full rag reponse
         )
 
