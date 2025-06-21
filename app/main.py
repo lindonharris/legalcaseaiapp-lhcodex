@@ -376,13 +376,14 @@ async def generate_ai_note(
                 "user_id":       request.metadata["user_id"],       # ← maps to your user_id param
                 "note_type":     request.metadata["note_type"],     # ← maps to your note_type param
                 "project_id":    request.metadata["project_id"],    # ← maps to your project_id param  
-                "note_title":    request.metadata["note_title"],         # ← "project_name: question type"
+                "note_title":    request.metadata["note_title"],    # ← "project_name: question type"
                 "provider":      request.metadata["provider"],
                 "model_name":    request.metadata["model_name"],    # ← maps to your model_name param
                 "temperature":   request.metadata["temperature"],
                 "addtl_params":  request.metadata["addtl_params"]       # ← Dict passed in by weweb/postman 
-        }
-    )
+            }
+        )
+        # Poll in postman: "my_domain.com/task-status/{task_id}"
         return {"task_id": job.id}
 
     except Exception as e:
