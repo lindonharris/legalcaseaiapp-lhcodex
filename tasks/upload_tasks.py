@@ -18,7 +18,7 @@ from tasks.note_tasks import rag_note_task
 from tasks.celery_app import celery_app  # Import the Celery app instance (see celery_app.py for LocalHost config)
 from utils.audio_utils import generate_audio, generate_only_dialogue_text
 from utils.s3_utils import upload_to_s3, generate_presigned_url, s3_client, s3_bucket_name
-from utils.supabase_utils import insert_document_supabase_record, insert_mp3_supabase_record, insert_vector_supabase_record, supabase_client
+from utils.supabase_utils import update_document_sources_realtime_status_log, update_table_realtime_status_log, supabase_client
 from utils.cloudfront_utils import get_cloudfront_url
 from utils.document_loaders.loader_factory import get_loader_for
 from utils.instruction_templates import INSTRUCTION_TEMPLATES
@@ -46,35 +46,35 @@ except KeyError:
 logger = logging.getLogger(__name__)
 
 # === PRODUCTION CELERY TASKS === #
-def update_db_poll_status(
-        status: str, 
-        source_id: str, 
-        error_message: str = None
-):
-    """Helper function to update the status in document_sources."""
-    try:
-        payload = {"vector_embed_status": status}
-        if error_message:
-            payload["error_message"] = error_message[:255]  # if you have that column
-            logger.error(f"[DB] Setting status={status} for {source_id} w/ error: {error_message}")
+# def update_document_sources_realtime_status_log(
+#         status: str, 
+#         source_id: str, 
+#         error_message: str = None
+# ):
+#     """Helper function to update the status in document_sources."""
+#     try:
+#         payload = {"vector_embed_status": status}
+#         if error_message:
+#             payload["error_message"] = error_message[:255]  # if you have that column
+#             logger.error(f"[DB] Setting status={status} for {source_id} w/ error: {error_message}")
 
-        logger.debug(f"[DB] update document_sources set status={status} where id={source_id}")
-        update_resp = (
-            supabase_client
-                .table("document_sources")
-                .update(payload)
-                .eq("id", source_id)
-                .execute()
-        )
+#         logger.debug(f"[DB] update document_sources set status={status} where id={source_id}")
+#         update_resp = (
+#             supabase_client
+#                 .table("document_sources")
+#                 .update(payload)
+#                 .eq("id", source_id)
+#                 .execute()
+#         )
 
-        # **New**: inspect the Supabase response
-        if hasattr(update_resp, "data"):
-            logger.debug(f"[DB] Update returned data: {update_resp.data}")
-        if hasattr(update_resp, "status_code"):
-            logger.debug(f"[DB] HTTP status code: {update_resp.status_code}")
+#         # **New**: inspect the Supabase response
+#         if hasattr(update_resp, "data"):
+#             logger.debug(f"[DB] Update returned data: {update_resp.data}")
+#         if hasattr(update_resp, "status_code"):
+#             logger.debug(f"[DB] HTTP status code: {update_resp.status_code}")
 
-    except Exception as db_e:
-        logger.critical(f"[DB] Failed to update status for {source_id}: {db_e}", exc_info=True)
+#     except Exception as db_e:
+#         logger.critical(f"[DB] Failed to update status for {source_id}: {db_e}", exc_info=True)
 
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
 def process_document_task(self, files, metadata=None):
@@ -172,13 +172,19 @@ def process_document_task(self, files, metadata=None):
                         status = he.response.status_code if he.response is not None else "N/A"
                         err_msg = f"{status} error downloading {file_url}"
                         logger.error(f"[file loop] Failed downloading '{file_url}': {err_msg}")
-                        update_db_poll_status("FAILED", error_message=err_msg)
+                        update_document_sources_realtime_status_log(
+                            "FAILED", 
+                            error_message=err_msg
+                        )
                         failed_files += 1
                         continue
                     except Exception as e:
                         err_msg = f"Download exception for {file_url}: {e}"
                         logger.error(f"[file loop] {err_msg}", exc_info=True)
-                        update_db_poll_status("FAILED", error_message=err_msg)
+                        update_document_sources_realtime_status_log(
+                            "FAILED", 
+                            error_message=err_msg
+                        )
                         failed_files += 1
                         continue
 
@@ -227,6 +233,11 @@ def process_document_task(self, files, metadata=None):
                 logger.info(f"Prepared upload row for {file_path} → {url}")
 
             except Exception as e:
+                update_table_realtime_status_log(
+                    table_name="projects",
+                    id=metadata["project_id"], 
+                    log="FILE_PROCESSING_ERROR"
+                )
                 failed_files += 1
                 logger.error(f"[file loop] Failed processing '{file_url}': {e}", exc_info=True)
                 # Update the task state with error information
@@ -250,6 +261,11 @@ def process_document_task(self, files, metadata=None):
             raise RuntimeError("All file uploads failed.")
 
         # === 2) Bulk insert into Supabase ===
+        update_table_realtime_status_log(
+            table_name="projects",
+            id=metadata["project_id"], 
+            log="DATABASE_INSERTION"
+        )
         self.update_state(
             state='PROCESSING',
             meta={
@@ -301,6 +317,11 @@ def process_document_task(self, files, metadata=None):
                     logger.warning(f"[CELERY] Could not delete temp file {p} during Supabase failure cleanup.", exc_info=True)
             
             # Update task state
+            update_table_realtime_status_log(
+                table_name="projects",
+                id=metadata["project_id"], 
+                log="FAILURE"
+            )
             self.update_state(
                 state='FAILURE',
                 meta={
@@ -334,6 +355,11 @@ def process_document_task(self, files, metadata=None):
                 logger.warning(f"[CELERY] Could not delete temp file {path}", exc_info=True)
 
         # === 4) Kick off the Chord (Embedding Tasks + Final Callback) ===
+        update_table_realtime_status_log(
+            table_name="projects",
+            id=metadata["project_id"], 
+            log="INITIATING_EMBEDDING"
+        )
         self.update_state(
             state='PROCESSING',
             meta={
@@ -374,6 +400,11 @@ def process_document_task(self, files, metadata=None):
         logger.info(f"Chord launched; callback task ID = {workflow_id}")
 
         # Update final state with success and result information
+        update_table_realtime_status_log(
+            table_name="projects",
+            id=metadata["project_id"], 
+            log="SUCCESS"
+        )
         self.update_state(
             state='SUCCESS',
             meta={
@@ -400,6 +431,11 @@ def process_document_task(self, files, metadata=None):
 
         try:
             # Update state before retry
+            update_table_realtime_status_log(
+                table_name="projects",
+                id=metadata["project_id"], 
+                log="RETRY"
+            )
             self.update_state(
                 state='RETRY',
                 meta={
@@ -416,7 +452,13 @@ def process_document_task(self, files, metadata=None):
             logger.critical(
                 f"[CELERY] process_document_task failed permanently after {self.max_retries} retries: {e}"
             )
+
             # Update final failure state 
+            update_table_realtime_status_log(
+                table_name="projects",
+                id=metadata["project_id"], 
+                log="FAILURE"
+            )
             self.update_state(
                 state='FAILURE',
                 meta={
@@ -436,7 +478,7 @@ def process_document_task(self, files, metadata=None):
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
 def append_document_task(self, files, metadata=None):
     """
-    Main Celery task to:
+    Main Celery task to add additional documents to an ALREADY existing project:
         1) upload docs (.pdf, docx, doc, epub, md, txt) to S3, 
         2) save to Supabase, 
         3) and trigger vector embedding tasks.
@@ -526,13 +568,19 @@ def append_document_task(self, files, metadata=None):
                         status = he.response.status_code if he.response is not None else "N/A"
                         err_msg = f"{status} error downloading {file_url}"
                         logger.error(f"[file loop] Failed downloading '{file_url}': {err_msg}")
-                        update_db_poll_status("FAILED", error_message=err_msg)
+                        update_document_sources_realtime_status_log(
+                            "FAILED", 
+                            error_message=err_msg
+                        )
                         failed_files += 1
                         continue
                     except Exception as e:
                         err_msg = f"Download exception for {file_url}: {e}"
                         logger.error(f"[file loop] {err_msg}", exc_info=True)
-                        update_db_poll_status("FAILED", error_message=err_msg)
+                        update_document_sources_realtime_status_log(
+                            "FAILED", 
+                            error_message=err_msg
+                        )
                         failed_files += 1
                         continue
 
@@ -581,6 +629,11 @@ def append_document_task(self, files, metadata=None):
                 logger.info(f"Prepared upload row for {file_path} → {url}")
 
             except Exception as e:
+                update_table_realtime_status_log(
+                    table_name="projects",
+                    id=metadata["project_id"], 
+                    log="FILE_PROCESSING_ERROR"
+                )
                 failed_files += 1
                 logger.error(f"[file loop] Failed processing '{file_url}': {e}", exc_info=True)
                 # Update the task state with error information
@@ -639,6 +692,11 @@ def append_document_task(self, files, metadata=None):
             )
             
             # Update all document statuses to PENDING
+            update_table_realtime_status_log(
+                table_name="projects",
+                id=metadata["project_id"], 
+                log="PENDING"
+            )
             update_payload = [{"id": sid, "vector_embed_status": "PENDING"} for sid in source_ids]
             update_resp = supabase_client.table("document_sources") \
                                 .upsert(update_payload) \
@@ -655,6 +713,11 @@ def append_document_task(self, files, metadata=None):
                     logger.warning(f"[CELERY] Could not delete temp file {p} during Supabase failure cleanup.", exc_info=True)
             
             # Update task state
+            update_table_realtime_status_log(
+                table_name="projects",
+                id=metadata["project_id"], 
+                log="FAILURE"
+            )
             self.update_state(
                 state='FAILURE',
                 meta={
@@ -719,8 +782,13 @@ def append_document_task(self, files, metadata=None):
         logger.info(f"Embedding tasks launched as group {embedding_group_id}")
 
         # Update final state with success; embeddings are in progress
+        update_table_realtime_status_log(
+                table_name="projects",
+                id=metadata["project_id"], 
+                log="COMPLETED"
+        )
         self.update_state(
-            state='SUCCESS',
+            state='COMPLETED',
             meta={
                 'stage': 'COMPLETED',
                 'message': 'Document upload complete, embedding in progress...',
@@ -745,6 +813,11 @@ def append_document_task(self, files, metadata=None):
 
         try:
             # Update state before retry
+            update_table_realtime_status_log(
+                table_name="projects",
+                id=metadata["project_id"], 
+                log="RETRY"
+            )
             self.update_state(
                 state='RETRY',
                 meta={
@@ -761,7 +834,13 @@ def append_document_task(self, files, metadata=None):
             logger.critical(
                 f"[CELERY] process_document_task failed permanently after {self.max_retries} retries: {e}"
             )
+
             # Update final failure state 
+            update_table_realtime_status_log(
+                table_name="projects",
+                id=metadata["project_id"], 
+                log="FAILURE"
+            )
             self.update_state(
                 state='FAILURE',
                 meta={
@@ -808,7 +887,10 @@ def chunk_and_embed_task(
 
     try:
         logger.info(f"Starting chunk_and_embed_task for URL: {doc_url}, source_id: {str(source_id)}")
-        update_db_poll_status("EMBEDDING", source_id)
+        update_document_sources_realtime_status_log(
+            "EMBEDDING", 
+            source_id
+        )
 
         # 1) Download the file
         resp = requests.get(doc_url)
@@ -842,7 +924,7 @@ def chunk_and_embed_task(
             loader = get_loader_for(local_path)
         except ValueError as e:
             # Mark as failed in DB and raise so the task can retry or fail cleanly
-            update_db_poll_status("FAILED", source_id, error_message=str(e))
+            update_document_sources_realtime_status_log("FAILED", source_id, error_message=str(e))
             raise
 
         all_docs = loader.load_documents(local_path)
@@ -912,7 +994,7 @@ def chunk_and_embed_task(
                             .execute()
         
         # Update status to COMPLETE after successful vector insert
-        update_db_poll_status(
+        update_document_sources_realtime_status_log(
             "COMPLETE", 
             source_id,
             # Do not pass an error
@@ -921,12 +1003,12 @@ def chunk_and_embed_task(
 
     except Exception as e:
         logger.error(f"Failed chunk/embed for {doc_url}: {e}", exc_info=True)
-        update_db_poll_status("FAILED", source_id, error_message=str(e))
+        update_document_sources_realtime_status_log("FAILED", source_id, error_message=str(e))
         raise
     except OpenAIError as e:
         # Catch specific OpenAI errors for more targeted logging/handling if needed
         logger.error(f"OpenAI API error during embedding for {doc_url}: {e}", exc_info=True)
-        update_db_poll_status("FAILED", source_id, error_message=str(e))
+        update_document_sources_realtime_status_log("FAILED", source_id, error_message=str(e))
         raise self.retry(exc=e)
     finally:
         # 7) Cleanup temp file

@@ -160,3 +160,57 @@ def insert_chat_message_supabase_record(
         return response
     except Exception as e:
         raise Exception(f"Error saving to public.messages: {e}")
+    
+def update_table_realtime_status_log(
+    client,
+    table_name,
+    row_uuid,
+    log,
+):
+    '''UPDATE error/status log in public.table_name, mainly (public.projects)'''
+    try:
+        response = client.table(table_name).update(
+            {
+                "status_logger": log
+            }
+        ).eq("id", row_uuid).execute() # Use .eq() to target the specific row by its 'id'
+        
+        # Check for errors in the response
+        if response.data:
+            print(f"Successfully updated row {row_uuid} in public.{table_name}.")
+            return response.data
+        else:
+            raise Exception(f"No data returned or error updating row {row_uuid}: {response.error}")
+
+    except Exception as e:
+        raise Exception(f"Error saving to public.{table_name}: {e}")
+
+def update_document_sources_realtime_status_log(
+        status: str, 
+        source_id: str, 
+        error_message: str = None
+):
+    """Helper function to update the status in document_sources."""
+    try:
+        payload = {"vector_embed_status": status}
+        if error_message:
+            payload["error_message"] = error_message[:255]  # if you have that column
+            logger.error(f"[DB] Setting status={status} for {source_id} w/ error: {error_message}")
+
+        logger.debug(f"[DB] update document_sources set status={status} where id={source_id}")
+        update_resp = (
+            supabase_client
+                .table("document_sources")
+                .update(payload)
+                .eq("id", source_id)
+                .execute()
+        )
+
+        # **New**: inspect the Supabase response
+        if hasattr(update_resp, "data"):
+            logger.debug(f"[DB] Update returned data: {update_resp.data}")
+        if hasattr(update_resp, "status_code"):
+            logger.debug(f"[DB] HTTP status code: {update_resp.status_code}")
+
+    except Exception as db_e:
+        logger.critical(f"[DB] Failed to update status for {source_id}: {db_e}", exc_info=True)
