@@ -164,7 +164,7 @@ def insert_chat_message_supabase_record(
 def update_table_realtime_status_log(
     client,
     table_name,
-    row_uuid,
+    project_uuid,
     log,
 ):
     '''UPDATE error/status log in public.table_name, mainly (public.projects)'''
@@ -173,14 +173,14 @@ def update_table_realtime_status_log(
             {
                 "status_logger": log
             }
-        ).eq("id", row_uuid).execute() # Use .eq() to target the specific row by its 'id'
+        ).eq("id", project_uuid).execute() # Use .eq() to target the specific row by its 'id'
         
         # Check for errors in the response
         if response.data:
-            print(f"Successfully updated row {row_uuid} in public.{table_name}.")
+            print(f"Successfully updated row {project_uuid} in public.{table_name}.")
             return response.data
         else:
-            raise Exception(f"No data returned or error updating row {row_uuid}: {response.error}")
+            raise Exception(f"No data returned or error updating row {project_uuid}: {response.error}")
 
     except Exception as e:
         raise Exception(f"Error saving to public.{table_name}: {e}")

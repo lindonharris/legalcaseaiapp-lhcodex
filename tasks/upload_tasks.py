@@ -235,7 +235,7 @@ def process_document_task(self, files, metadata=None):
             except Exception as e:
                 update_table_realtime_status_log(
                     table_name="projects",
-                    id=metadata["project_id"], 
+                    project_uuid=metadata["project_id"], 
                     log="FILE_PROCESSING_ERROR"
                 )
                 failed_files += 1
@@ -263,7 +263,7 @@ def process_document_task(self, files, metadata=None):
         # === 2) Bulk insert into Supabase ===
         update_table_realtime_status_log(
             table_name="projects",
-            id=metadata["project_id"], 
+            project_uuid=metadata["project_id"], 
             log="DATABASE_INSERTION"
         )
         self.update_state(
@@ -319,7 +319,7 @@ def process_document_task(self, files, metadata=None):
             # Update task state
             update_table_realtime_status_log(
                 table_name="projects",
-                id=metadata["project_id"], 
+                project_uuid=metadata["project_id"], 
                 log="FAILURE"
             )
             self.update_state(
@@ -357,7 +357,7 @@ def process_document_task(self, files, metadata=None):
         # === 4) Kick off the Chord (Embedding Tasks + Final Callback) ===
         update_table_realtime_status_log(
             table_name="projects",
-            id=metadata["project_id"], 
+            project_uuid=metadata["project_id"], 
             log="INITIATING_EMBEDDING"
         )
         self.update_state(
@@ -402,7 +402,7 @@ def process_document_task(self, files, metadata=None):
         # Update final state with success and result information
         update_table_realtime_status_log(
             table_name="projects",
-            id=metadata["project_id"], 
+            project_uuid=metadata["project_id"], 
             log="SUCCESS"
         )
         self.update_state(
@@ -433,7 +433,7 @@ def process_document_task(self, files, metadata=None):
             # Update state before retry
             update_table_realtime_status_log(
                 table_name="projects",
-                id=metadata["project_id"], 
+                project_uuid=metadata["project_id"], 
                 log="RETRY"
             )
             self.update_state(
@@ -456,7 +456,7 @@ def process_document_task(self, files, metadata=None):
             # Update final failure state 
             update_table_realtime_status_log(
                 table_name="projects",
-                id=metadata["project_id"], 
+                project_uuid=metadata["project_id"], 
                 log="FAILURE"
             )
             self.update_state(
@@ -631,7 +631,7 @@ def append_document_task(self, files, metadata=None):
             except Exception as e:
                 update_table_realtime_status_log(
                     table_name="projects",
-                    id=metadata["project_id"], 
+                    project_uuid=metadata["project_id"], 
                     log="FILE_PROCESSING_ERROR"
                 )
                 failed_files += 1
@@ -694,7 +694,7 @@ def append_document_task(self, files, metadata=None):
             # Update all document statuses to PENDING
             update_table_realtime_status_log(
                 table_name="projects",
-                id=metadata["project_id"], 
+                project_uuid=metadata["project_id"], 
                 log="PENDING"
             )
             update_payload = [{"id": sid, "vector_embed_status": "PENDING"} for sid in source_ids]
@@ -715,7 +715,7 @@ def append_document_task(self, files, metadata=None):
             # Update task state
             update_table_realtime_status_log(
                 table_name="projects",
-                id=metadata["project_id"], 
+                project_uuid=metadata["project_id"], 
                 log="FAILURE"
             )
             self.update_state(
@@ -784,7 +784,7 @@ def append_document_task(self, files, metadata=None):
         # Update final state with success; embeddings are in progress
         update_table_realtime_status_log(
                 table_name="projects",
-                id=metadata["project_id"], 
+                project_uuid=metadata["project_id"], 
                 log="COMPLETED"
         )
         self.update_state(
@@ -815,7 +815,7 @@ def append_document_task(self, files, metadata=None):
             # Update state before retry
             update_table_realtime_status_log(
                 table_name="projects",
-                id=metadata["project_id"], 
+                project_uuid=metadata["project_id"], 
                 log="RETRY"
             )
             self.update_state(
@@ -838,7 +838,7 @@ def append_document_task(self, files, metadata=None):
             # Update final failure state 
             update_table_realtime_status_log(
                 table_name="projects",
-                id=metadata["project_id"], 
+                project_uuid=metadata["project_id"], 
                 log="FAILURE"
             )
             self.update_state(
