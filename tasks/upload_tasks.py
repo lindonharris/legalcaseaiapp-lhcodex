@@ -234,6 +234,7 @@ def process_document_task(self, files, metadata=None):
 
             except Exception as e:
                 update_table_realtime_status_log(
+                    client=supabase_client,
                     table_name="projects",
                     project_uuid=metadata["project_id"], 
                     log="FILE_PROCESSING_ERROR"
@@ -262,6 +263,7 @@ def process_document_task(self, files, metadata=None):
 
         # === 2) Bulk insert into Supabase ===
         update_table_realtime_status_log(
+            client=supabase_client,
             table_name="projects",
             project_uuid=metadata["project_id"], 
             log="DATABASE_INSERTION"
@@ -318,6 +320,7 @@ def process_document_task(self, files, metadata=None):
             
             # Update task state
             update_table_realtime_status_log(
+                client=supabase_client,
                 table_name="projects",
                 project_uuid=metadata["project_id"], 
                 log="FAILURE"
@@ -356,6 +359,7 @@ def process_document_task(self, files, metadata=None):
 
         # === 4) Kick off the Chord (Embedding Tasks + Final Callback) ===
         update_table_realtime_status_log(
+            client=supabase_client,
             table_name="projects",
             project_uuid=metadata["project_id"], 
             log="INITIATING_EMBEDDING"
@@ -401,6 +405,7 @@ def process_document_task(self, files, metadata=None):
 
         # Update final state with success and result information
         update_table_realtime_status_log(
+            client=supabase_client,
             table_name="projects",
             project_uuid=metadata["project_id"], 
             log="SUCCESS"
@@ -432,6 +437,7 @@ def process_document_task(self, files, metadata=None):
         try:
             # Update state before retry
             update_table_realtime_status_log(
+                client=supabase_client,
                 table_name="projects",
                 project_uuid=metadata["project_id"], 
                 log="RETRY"
@@ -455,6 +461,7 @@ def process_document_task(self, files, metadata=None):
 
             # Update final failure state 
             update_table_realtime_status_log(
+                client=supabase_client,
                 table_name="projects",
                 project_uuid=metadata["project_id"], 
                 log="FAILURE"
@@ -630,6 +637,7 @@ def append_document_task(self, files, metadata=None):
 
             except Exception as e:
                 update_table_realtime_status_log(
+                    client=supabase_client,
                     table_name="projects",
                     project_uuid=metadata["project_id"], 
                     log="FILE_PROCESSING_ERROR"
@@ -693,6 +701,7 @@ def append_document_task(self, files, metadata=None):
             
             # Update all document statuses to PENDING
             update_table_realtime_status_log(
+                client=supabase_client,
                 table_name="projects",
                 project_uuid=metadata["project_id"], 
                 log="PENDING"
@@ -714,6 +723,7 @@ def append_document_task(self, files, metadata=None):
             
             # Update task state
             update_table_realtime_status_log(
+                client=supabase_client,
                 table_name="projects",
                 project_uuid=metadata["project_id"], 
                 log="FAILURE"
@@ -783,6 +793,7 @@ def append_document_task(self, files, metadata=None):
 
         # Update final state with success; embeddings are in progress
         update_table_realtime_status_log(
+                client=supabase_client,
                 table_name="projects",
                 project_uuid=metadata["project_id"], 
                 log="COMPLETED"
@@ -814,6 +825,7 @@ def append_document_task(self, files, metadata=None):
         try:
             # Update state before retry
             update_table_realtime_status_log(
+                client=supabase_client,
                 table_name="projects",
                 project_uuid=metadata["project_id"], 
                 log="RETRY"
@@ -837,6 +849,7 @@ def append_document_task(self, files, metadata=None):
 
             # Update final failure state 
             update_table_realtime_status_log(
+                client=supabase_client,
                 table_name="projects",
                 project_uuid=metadata["project_id"], 
                 log="FAILURE"
