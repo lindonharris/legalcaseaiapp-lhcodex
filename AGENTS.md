@@ -7,6 +7,7 @@ This repository welcomes contributions from automated agents. To keep the histor
 - The ticket ID must be unique and sequential (e.g., `CL-003`, `CL-004`).
 - Reference the ticket ID in your commit message prefix and in the pull request title.
 - Keep `CHANGELOG.csv` sorted by ticket number and never modify existing rows.
+- Write at least two sentences in the description column for every changelog entry.
 
 ## Development Workflow
 1. Make your code changes.
