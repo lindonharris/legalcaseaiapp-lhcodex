@@ -7,7 +7,8 @@ This repository tracks updates in `CHANGELOG.csv`. Each row is a JIRA-style entr
 - **Date**: Date of change in `YYYY-MM-DD` format.
 - **Time**: Time of change (24h) in `HH:MM` format.
 - **Author**: Person making the change.
-- **Description**: Rich text summary of the change.
+- **Description**: Rich text summary of the change. Use at least two sentences
+  to fully explain each update.
 - **Files Affected**: Key files or paths modified.
 - **Notes**: Any additional comments or context.
 
@@ -19,7 +20,7 @@ This repository tracks updates in `CHANGELOG.csv`. Each row is a JIRA-style entr
 
 Example entry:
 ```
-CL-002,2025-06-18,09:30,LinDon Harris,"Updated README with setup steps","README.md",""
+CL-002,2025-06-18,09:30,LinDon Harris,"Updated README with setup steps. It now includes environment variable configuration.","README.md",""
 ```
 
 Keep the log sorted by ticket number to maintain history.
